@@ -1,56 +1,105 @@
-# report.py — PDF builder compatible with fpdf 1.x and fpdf2
+# report.py — Unicode-safe PDF with chart + metadata (fpdf2 + matplotlib)
 from datetime import datetime
 from fpdf import FPDF
+import io
+import matplotlib.pyplot as plt
 
-def build_pdf(rye_series, summary: dict, title: str = "RYE Report") -> bytes:
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+PAGE_MARGIN = 15  # mm
+
+class PDF(FPDF):
+    def header(self):
+        self.set_font("Helvetica", "B", 16)
+        self.cell(0, 10, "RYE Report", ln=True, align="L")
+        self.ln(2)
+
+def _make_plot_png(rye_series, rye_roll=None) -> bytes:
+    """Render a simple line chart to PNG (bytes) using matplotlib."""
+    fig = plt.figure(figsize=(7, 3))  # wide banner-like plot
+    ax = plt.gca()
+    ax.plot(rye_series, label="RYE")
+    if rye_roll is not None:
+        ax.plot(rye_roll, label="RYE (rolling)")
+    ax.set_xlabel("Index")
+    ax.set_ylabel("RYE")
+    ax.set_title("Repair Yield per Energy")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best")
+    buf = io.BytesIO()
+    plt.tight_layout()
+    fig.savefig(buf, format="png", dpi=160)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+def build_pdf(
+    rye_series,
+    summary: dict,
+    title: str = "RYE Report",
+    metadata: dict | None = None,
+    plot_series: dict | None = None,  # {"rye": [...], "rye_roll": [...]}
+) -> bytes:
+    pdf = PDF()
+    pdf.set_auto_page_break(auto=True, margin=PAGE_MARGIN)
     pdf.add_page()
 
-    # Header
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, title, ln=True, align="L")
-    pdf.set_font("Arial", "", 11)
-    pdf.cell(0, 8, f"Generated: {datetime.utcnow().isoformat()}Z", ln=True)
-    pdf.ln(4)
+    # Title + timestamp
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.cell(0, 9, title, ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, f"Generated: {datetime.utcnow().isoformat()}Z", ln=True)
+    pdf.ln(2)
 
-    # Summary
-    pdf.set_font("Arial", "B", 12)
+    # Metadata (left column)
+    if metadata:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Dataset metadata", ln=True)
+        pdf.set_font("Helvetica", "", 11)
+        for k, v in metadata.items():
+            pdf.multi_cell(0, 6, f"{k}: {v}")
+        pdf.ln(2)
+
+    # Summary stats
+    pdf.set_font("Helvetica", "B", 12)
     pdf.cell(0, 8, "Summary statistics", ln=True)
-    pdf.set_font("Arial", "", 11)
+    pdf.set_font("Helvetica", "", 11)
     for k in ["mean", "median", "max", "min", "count"]:
         v = summary.get(k, "")
         pdf.cell(0, 6, f"{k}: {v}", ln=True)
+    pdf.ln(2)
 
-    pdf.ln(4)
-    pdf.set_font("Arial", "B", 12)
+    # Chart (auto-scaled to page width)
+    try:
+        png = _make_plot_png(
+            plot_series.get("rye", rye_series),
+            plot_series.get("rye_roll") if plot_series else None,
+        )
+        img_buf = io.BytesIO(png)
+        page_width = pdf.w - 2 * PAGE_MARGIN
+        pdf.image(img_buf, w=page_width)
+        pdf.ln(2)
+    except Exception as e:
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.multi_cell(0, 6, f"[Chart rendering failed: {e}]")
+
+    # Sample values (first 100)
+    pdf.set_font("Helvetica", "B", 12)
     pdf.cell(0, 8, "RYE sample values", ln=True)
-    pdf.set_font("Arial", "", 11)
-    for i, val in enumerate(list(rye_series)[:120]):  # keep it short
+    pdf.set_font("Helvetica", "", 11)
+    for i, val in enumerate(list(rye_series)[:100]):
         pdf.cell(0, 6, f"{i}: {val}", ln=True)
 
-    pdf.ln(6)
-    pdf.set_font("Arial", "I", 10)
+    # Footer
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "I", 10)
     pdf.multi_cell(
         0, 6,
         "Open science by Cody Ryan Jenkins (CC BY 4.0). "
-        "Learn more: Reparodynamics — RYE (Repair Yield per Energy)."
+        "Learn more: Reparodynamics – RYE (Repair Yield per Energy)."
     )
 
-    # -------- Output handling (works for both fpdf and fpdf2) --------
-    # In fpdf 1.x, output(dest='S') returns a *str* that must be latin-1 encoded.
-    # In fpdf2, output(dest='S') returns *bytes* already.
-    try:
-        out = pdf.output(dest="S")
-    except TypeError:
-        # Very old fpdf versions sometimes behave oddly; last-resort fallback
-        from io import BytesIO
-        buf = BytesIO()
-        # fpdf2 can also accept a file-like object
-        pdf.output(buf)
-        return buf.getvalue()
-
-    if isinstance(out, bytes):
-        return out
-    # str -> bytes (fpdf 1.x)
-    return out.encode("latin-1")
+    # Output to bytes
+    out = io.BytesIO()
+    pdf.output(out)
+    data = out.getvalue()
+    out.close()
+    return data
