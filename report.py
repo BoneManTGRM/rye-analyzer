@@ -1,193 +1,230 @@
 # report.py
-# PDF builder with safe text wrapping, margins, and an auto interpretation block.
-
 from fpdf import FPDF
-import io
 from datetime import datetime
 from typing import Dict, List, Optional
+import io
 
-PAGE_W = 210  # A4 mm
-PAGE_H = 297
-LM = 12       # left margin
-RM = 12       # right margin
-TM = 12       # top margin
-COL_GAP = 6
+# Matplotlib is used only to render the in-PDF chart
+import matplotlib.pyplot as plt
 
-class PDF(FPDF):
-    def header(self):
-        self.set_font("Arial", "B", 16)
-        self.cell(0, 10, "RYE Report", ln=True, align="L")
-        self.set_font("Arial", "", 10)
-        self.cell(0, 6, f"Generated: {datetime.utcnow().isoformat()}Z", ln=True, align="L")
-        self.ln(2)
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Arial", "I", 9)
-        self.cell(
-            0, 8,
-            "Open science by Cody Ryan Jenkins (CC BY 4.0). Learn more: Reparodynamics — RYE (Repair Yield per Energy).",
-            ln=True, align="C"
-        )
+MM = 1.0  # convenience
 
-def _safe_multicell(pdf: FPDF, w: float, h: float, txt: str, align: str = "L"):
+class Report(FPDF):
+    """FPDF with sensible margins and auto page breaks."""
+    def __init__(self):
+        super().__init__(orientation="P", unit="mm", format="A4")
+        # consistent margins; leave room at bottom for footer
+        self.set_margins(12, 12, 12)
+        self.set_auto_page_break(auto=True, margin=15)
+
+    @property
+    def content_w(self) -> float:
+        """Printable width inside margins."""
+        return self.w - self.l_margin - self.r_margin
+
+
+def _safe_text(text: str) -> str:
     """
-    FPDF can throw when a single long 'word' exceeds the line width.
-    We pre-wrap very long tokens so multi_cell always has break points.
+    FPDF base14 fonts are latin-1. Replace characters that can't be encoded.
     """
-    if not isinstance(txt, str):
-        txt = str(txt)
+    if text is None:
+        return ""
+    try:
+        text.encode("latin-1")
+        return text
+    except Exception:
+        return text.encode("latin-1", "replace").decode("latin-1")
 
-    # soft wrap extra-long tokens
-    max_token = 60
-    tokens = []
-    for t in txt.split(" "):
-        if len(t) <= max_token:
-            tokens.append(t)
-        else:
-            # insert zero-width spaces to hint wrapping for very long tokens/urls
-            chunks = [t[i:i+max_token] for i in range(0, len(t), max_token)]
-            tokens.append("\u200b".join(chunks))
-    safe = " ".join(tokens)
 
-    pdf.multi_cell(w, h, safe, align=align)
+def _kv_block(pdf: Report, items: List[tuple], col_w: Optional[List[float]] = None, font_size: int = 11):
+    """
+    Render simple two-column key/value rows that never run off the page.
+    Long values wrap using multi_cell.
+    """
+    if col_w is None:
+        # 30% for key, 70% for value
+        k = max(35.0, pdf.content_w * 0.32)
+        v = pdf.content_w - k
+        col_w = [k, v]
+
+    pdf.set_font("Arial", size=font_size)
+    for key, value in items:
+        key = _safe_text(str(key))
+        value = _safe_text("" if value is None else str(value))
+
+        # key cell (no wrapping)
+        y_before = pdf.get_y()
+        pdf.set_font("Arial", "B", font_size)
+        pdf.cell(col_w[0], 6, key, border=0)
+        pdf.set_font("Arial", "", font_size)
+
+        # value cell (wrapping)
+        x_after_key = pdf.get_x()
+        pdf.set_xy(x_after_key, y_before)
+        pdf.multi_cell(col_w[1], 6, value, border=0, align="L")
+    pdf.ln(1)
+
+
+def _add_heading(pdf: Report, text: str, level: int = 1):
+    size = 16 if level == 1 else 13
+    style = "B" if level <= 2 else ""
+    pdf.set_font("Arial", style, size)
+    pdf.cell(0, 9, _safe_text(text), ln=True)
+    pdf.ln(1)
+
+
+def _add_paragraph(pdf: Report, text: str, size: int = 11):
+    pdf.set_font("Arial", "", size)
+    pdf.multi_cell(0, 6, _safe_text(text), align="L")
+    pdf.ln(1)
+
+
+def _add_series_plot(pdf: Report, series_dict: Dict[str, List[float]]):
+    """
+    Draw a simple line chart (RYE + optional rolling).
+    """
+    if not series_dict:
+        return
+
+    fig, ax = plt.subplots(figsize=(6.3, 2.6), dpi=200)  # wide & short for A4
+    for label, arr in series_dict.items():
+        if arr is None:
+            continue
+        ax.plot(list(range(len(arr))), arr, label=label)
+    ax.set_title("Repair Yield per Energy")
+    ax.set_xlabel("Index")
+    ax.set_ylabel("RYE")
+    ax.legend(loc="best")
+    ax.grid(True, linewidth=0.3)
+
+    buf = io.BytesIO()
+    fig.tight_layout()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+
+    # image scaled to full text width
+    pdf.image(buf, w=pdf.content_w)
+    pdf.ln(2)
+
 
 def build_pdf(
     rye_series: List[float],
     summary: Dict,
-    *,
+    meta: Dict,
     title: str = "RYE Report",
-    meta: Optional[Dict] = None,
     plot_series: Optional[Dict[str, List[float]]] = None,
     interpretation: Optional[str] = None,
 ) -> bytes:
     """
-    Returns PDF bytes.
-    - rye_series: list of RYE values
-    - summary: dict with mean, median, max, min, count
-    - meta: optional dataset metadata you want listed
-    - plot_series: optional extra series to list (for quick inspection)
-    - interpretation: optional paragraph to print under 'Interpretation'
+    Create a portable multi-page PDF report.
+
+    Parameters
+    ----------
+    rye_series : list of floats
+        Computed RYE values (primary series).
+    summary : dict
+        Keys like mean, median, max, min, count. Values may be float/int/str.
+    meta : dict
+        Dataset metadata (e.g., rows, repair_col, energy_col, rolling_window).
+    title : str
+        Report title (shown in header).
+    plot_series : dict[str, list[float]] | None
+        Named series to plot, e.g., {"RYE": [...], "RYE (rolling)": [...] }.
+    interpretation : str | None
+        Auto/expert interpretation block appended at the end.
     """
-    pdf = PDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf = Report()
     pdf.add_page()
-    pdf.set_left_margin(LM)
-    pdf.set_right_margin(RM)
 
-    # Title (again to make export stand-alone if header is cropped by previewers)
-    pdf.set_font("Arial", "B", 14)
-    _safe_multicell(pdf, PAGE_W - LM - RM, 8, title)
-
-    # --- Dataset metadata in two columns (label / value) ---
+    # Header
+    _add_heading(pdf, _safe_text(title), level=1)
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 6, f"Generated: {datetime.utcnow().isoformat()}Z", ln=True)
     pdf.ln(2)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 7, "Dataset metadata", ln=True)
-    pdf.set_font("Arial", "", 11)
 
-    if meta is None:
-        meta = {}
-    # standard items if present in meta
-    lines = []
-    for k in ["rows", "repair_col", "energy_col", "time_col", "domain_col", "rolling_window"]:
+    # Dataset metadata
+    _add_heading(pdf, "Dataset metadata", level=2)
+    meta_items = []
+    for k in ["rows", "repair_col", "energy_col", "rolling_window"]:
         if k in meta:
-            lines.append((k.replace("_", " "), str(meta[k])))
+            meta_items.append((k, meta[k]))
+    # show any extra keys as well
+    for k, v in meta.items():
+        if k not in {"rows", "repair_col", "energy_col", "rolling_window"}:
+            meta_items.append((k, v))
+    _kv_block(pdf, meta_items)
 
-    # render key/val grid with controlled column widths
-    label_w = 38
-    val_w = PAGE_W - LM - RM - label_w
-    for label, value in lines:
-        y_before = pdf.get_y()
-        pdf.set_font("Arial", "B", 11)
-        pdf.cell(label_w, 6, f"{label}:", ln=0)
-        pdf.set_font("Arial", "", 11)
-        # value wraps inside remaining width
+    # Summary statistics
+    _add_heading(pdf, "Summary statistics", level=2)
+    # Order common metrics first, then any extras
+    ordered = ["mean", "median", "max", "min", "count"]
+    items = []
+    for k in ordered:
+        if k in summary:
+            val = summary[k]
+            if isinstance(val, float):
+                val = f"{val:.6f}"
+            items.append((k, val))
+    for k, v in summary.items():
+        if k not in ordered:
+            val = f"{v:.6f}" if isinstance(v, float) else v
+            items.append((k, val))
+    _kv_block(pdf, items)
+
+    # Chart (optional, but recommended)
+    if plot_series is None:
+        plot_series = {"RYE": rye_series}
+    _add_series_plot(pdf, plot_series)
+
+    # Sample values (first 100) in two columns, wrapped safely
+    _add_heading(pdf, "RYE sample values (first 100)", level=2)
+    pdf.set_font("Arial", "", 10)
+
+    first_n = list(rye_series)[:100]
+    left = []
+    right = []
+    for i, v in enumerate(first_n):
+        s = f"{i}: {v:.12f}" if isinstance(v, float) else f"{i}: {v}"
+        (left if i % 2 == 0 else right).append(s)
+
+    # render two columns using multi_cell to avoid overflow
+    col_w = pdf.content_w / 2 - 2
+    max_rows = max(len(left), len(right))
+    for i in range(max_rows):
+        ltxt = left[i] if i < len(left) else ""
+        rtxt = right[i] if i < len(right) else ""
+
+        y = pdf.get_y()
         x = pdf.get_x()
-        _safe_multicell(pdf, val_w, 6, value, align="L")
-        # ensure next row stays aligned
-        pdf.set_xy(LM, max(y_before + 6, pdf.get_y()))
-
-    # --- Summary stats in two columns so nothing runs off the page ---
+        pdf.multi_cell(col_w, 5, _safe_text(ltxt), border=0, align="L")
+        y2 = pdf.get_y()
+        pdf.set_xy(x + col_w + 4, y)   # small gutter
+        pdf.multi_cell(col_w, 5, _safe_text(rtxt), border=0, align="L")
+        pdf.set_y(max(y2, pdf.get_y()))
     pdf.ln(2)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 7, "Summary statistics", ln=True)
-    pdf.set_font("Arial", "", 11)
 
-    stats_map = {
-        "mean": summary.get("mean", ""),
-        "median": summary.get("median", ""),
-        "max": summary.get("max", ""),
-        "min": summary.get("min", ""),
-        "count": summary.get("count", ""),
-    }
-
-    keys = list(stats_map.keys())
-    half = (len(keys) + 1) // 2
-    col1 = keys[:half]
-    col2 = keys[half:]
-
-    col_w = (PAGE_W - LM - RM - COL_GAP) / 2
-    y_start = pdf.get_y()
-    # left column
-    x_left = LM
-    pdf.set_xy(x_left, y_start)
-    for k in col1:
-        _safe_multicell(pdf, col_w, 6, f"{k}: {stats_map[k]}", align="L")
-    y_after_left = pdf.get_y()
-    # right column
-    x_right = LM + col_w + COL_GAP
-    pdf.set_xy(x_right, y_start)
-    for k in col2:
-        _safe_multicell(pdf, col_w, 6, f"{k}: {stats_map[k]}", align="L")
-    pdf.set_y(max(y_after_left, pdf.get_y()))
-
-    # --- Optional quick list preview of series (first 100) ---
-    if rye_series:
-        pdf.ln(2)
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 7, "RYE sample values (first 100)", ln=True)
-        pdf.set_font("Arial", "", 10)
-        col_w = (PAGE_W - LM - RM - COL_GAP) / 2
-        left_vals = []
-        right_vals = []
-        for i, val in enumerate(rye_series[:100]):
-            (left_vals if i % 2 == 0 else right_vals).append(f"{i}: {val}")
-        y_start = pdf.get_y()
-        pdf.set_xy(LM, y_start)
-        for line in left_vals:
-            _safe_multicell(pdf, col_w, 5, line)
-        y_left = pdf.get_y()
-        pdf.set_xy(LM + col_w + COL_GAP, y_start)
-        for line in right_vals:
-            _safe_multicell(pdf, col_w, 5, line)
-        pdf.set_y(max(y_left, pdf.get_y()))
-
-    # --- Optional plot data echo (for debugging / inspection) ---
-    if plot_series:
-        pdf.ln(2)
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 7, "Series preview", ln=True)
-        pdf.set_font("Arial", "", 10)
-        for name, arr in plot_series.items():
-            _safe_multicell(pdf, PAGE_W - LM - RM, 5, f"{name}: {arr[:30]}")
-
-    # --- Interpretation section ---
+    # Interpretation (optional)
     if interpretation:
-        pdf.ln(2)
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 7, "Interpretation", ln=True)
-        pdf.set_font("Arial", "", 11)
-        _safe_multicell(pdf, PAGE_W - LM - RM, 6, interpretation)
+        _add_heading(pdf, "Interpretation", level=2)
+        _add_paragraph(pdf, interpretation, size=11)
 
-    # --- Output (handle fpdf / fpdf2 differences) ---
-    try:
-        data = pdf.output(dest="S").encode("latin-1")
-    except AttributeError:
-        data = pdf.output(dest="S").encode("utf-8")
-    except TypeError:
-        data = pdf.output(dest="S")
+    # Footer
+    pdf.ln(2)
+    pdf.set_font("Arial", "I", 9)
+    footer = (
+        "Open science by Cody Ryan Jenkins (CC BY 4.0). "
+        "Learn more: Reparodynamics  RYE (Repair Yield per Energy)  TGRM."
+    )
+    pdf.multi_cell(0, 5, _safe_text(footer), align="L")
 
-    # Ensure bytes for Streamlit download
+    # --- Output (handle fpdf / fpdf2 differences safely) ---
+    data = pdf.output(dest="S")
     if isinstance(data, str):
-        data = data.encode("latin-1", errors="ignore")
+        # Some FPDF versions return str, others bytes.
+        try:
+            data = data.encode("latin-1")
+        except Exception:
+            data = data.encode("utf-8", errors="ignore")
     return data
