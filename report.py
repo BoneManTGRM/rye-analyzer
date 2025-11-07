@@ -1,5 +1,4 @@
 from fpdf import FPDF
-import io
 from datetime import datetime
 
 def build_pdf(rye_series, summary: dict, title="RYE Report"):
@@ -14,7 +13,7 @@ def build_pdf(rye_series, summary: dict, title="RYE Report"):
     pdf.cell(0, 8, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
     pdf.ln(4)
 
-    # Summary
+    # Summary section
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "Summary statistics", ln=True)
     pdf.set_font("Arial", "", 11)
@@ -22,7 +21,7 @@ def build_pdf(rye_series, summary: dict, title="RYE Report"):
         v = summary.get(k, "")
         pdf.cell(0, 7, f"{k}: {v}", ln=True)
 
-    # RYE sample values
+    # Sample RYE values
     pdf.ln(4)
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "RYE sample values", ln=True)
@@ -35,6 +34,6 @@ def build_pdf(rye_series, summary: dict, title="RYE Report"):
     pdf.set_font("Arial", "I", 10)
     pdf.multi_cell(0, 6, "Open science by Cody Ryan Jenkins. CC BY 4.0")
 
-    # Output to bytes (this fixes your Streamlit error)
-    pdf_bytes = pdf.output(dest="S").encode("latin1")
+    # Return as raw bytes (Streamlit-compatible)
+    pdf_bytes = pdf.output(dest="S").encode("latin-1") if isinstance(pdf.output(dest="S"), str) else pdf.output(dest="S")
     return pdf_bytes
