@@ -1,12 +1,13 @@
-# report.py — Final Safe Version (auto-wrap + width limit + UTF-8 guard)
+# report.py — Final hardened version for Streamlit Cloud (handles all text safely)
 from datetime import datetime
 from fpdf import FPDF
 import io
 import matplotlib.pyplot as plt
 import textwrap
+import re
 
 PAGE_MARGIN = 15  # mm
-MAX_LINE_LEN = 120  # wrap long metadata lines manually
+MAX_LINE_LEN = 120  # characters per line before wrapping
 
 class PDF(FPDF):
     def header(self):
@@ -15,6 +16,7 @@ class PDF(FPDF):
         self.ln(4)
 
 def _make_plot_png(rye_series, rye_roll=None) -> bytes:
+    """Render chart as PNG for embedding."""
     fig = plt.figure(figsize=(7, 3))
     ax = plt.gca()
     ax.plot(rye_series, label="RYE", linewidth=1.5)
@@ -32,11 +34,21 @@ def _make_plot_png(rye_series, rye_roll=None) -> bytes:
     buf.seek(0)
     return buf.getvalue()
 
-def _safe_text(txt: str) -> str:
-    """Ensure safe encoding and manual wrapping."""
-    txt = str(txt)
+def _sanitize_text(text: str) -> str:
+    """Remove zero-width and control characters, and wrap safely."""
+    if text is None:
+        return ""
+    text = str(text)
+    # Remove non-printable and zero-width chars
+    text = re.sub(r"[\x00-\x1F\x7F\u200B\u200C\u200D\uFEFF]", "", text)
+    # Replace tabs with spaces
+    text = text.replace("\t", " ").strip()
+    # Break long lines manually
     lines = []
-    for line in txt.splitlines():
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue  # skip empty
         lines.extend(textwrap.wrap(line, MAX_LINE_LEN))
     return "\n".join(lines)
 
@@ -51,7 +63,7 @@ def build_pdf(
     pdf.set_auto_page_break(auto=True, margin=PAGE_MARGIN)
     pdf.add_page()
 
-    # Title
+    # Header
     pdf.set_font("Helvetica", "B", 15)
     pdf.cell(0, 9, title, ln=True)
     pdf.set_font("Helvetica", "", 11)
@@ -64,8 +76,9 @@ def build_pdf(
         pdf.cell(0, 8, "Dataset metadata", ln=True)
         pdf.set_font("Helvetica", "", 11)
         for k, v in metadata.items():
-            text = _safe_text(f"{k}: {v}")
-            pdf.multi_cell(0, 6, text, align="L")
+            clean_text = _sanitize_text(f"{k}: {v}")
+            if clean_text:
+                pdf.multi_cell(0, 6, clean_text, align="L")
         pdf.ln(2)
 
     # Summary
@@ -74,7 +87,9 @@ def build_pdf(
     pdf.set_font("Helvetica", "", 11)
     for k in ["mean", "median", "max", "min", "count"]:
         v = summary.get(k, "")
-        pdf.multi_cell(0, 6, _safe_text(f"{k}: {v}"), align="L")
+        clean_text = _sanitize_text(f"{k}: {v}")
+        if clean_text:
+            pdf.multi_cell(0, 6, clean_text, align="L")
     pdf.ln(2)
 
     # Chart
@@ -91,24 +106,27 @@ def build_pdf(
         pdf.set_font("Helvetica", "I", 10)
         pdf.multi_cell(0, 6, f"[Chart rendering failed: {e}]")
 
-    # Values
+    # RYE values
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(0, 8, "RYE sample values (first 100)", ln=True)
     pdf.set_font("Helvetica", "", 11)
     for i, val in enumerate(list(rye_series)[:100]):
-        pdf.cell(0, 6, f"{i}: {val}", ln=True)
+        text = _sanitize_text(f"{i}: {val}")
+        if text:
+            pdf.cell(0, 6, text, ln=True)
     pdf.ln(4)
 
     # Footer
     pdf.set_font("Helvetica", "I", 10)
     footer = (
         "Open science by Cody Ryan Jenkins (CC BY 4.0). "
-        "Learn more: Reparodynamics – RYE (Repair Yield per Energy)."
+        "Learn more: Reparodynamics — RYE (Repair Yield per Energy)."
     )
-    pdf.multi_cell(0, 6, _safe_text(footer), align="L")
+    pdf.multi_cell(0, 6, _sanitize_text(footer), align="L")
 
-    out = io.BytesIO()
-    pdf.output(out)
-    data = out.getvalue()
-    out.close()
+    # Export to bytes
+    output = io.BytesIO()
+    pdf.output(output)
+    data = output.getvalue()
+    output.close()
     return data
