@@ -1,15 +1,14 @@
-# Build a compact, multi-page PDF report for RYE analyses.
-
+# report.py
 from __future__ import annotations
 import io, os, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
-matplotlib.use("Agg")  # headless render
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
-    from fpdf import FPDF  # works for fpdf/fpdf2
+    from fpdf import FPDF
 except Exception as e:
     raise RuntimeError("fpdf/fpdf2 is required. Add 'fpdf>=1.7.2' to requirements.txt") from e
 
@@ -20,6 +19,8 @@ class Report(FPDF):
         super().__init__(orientation="P", unit="mm", format="A4")
         self.set_margins(12, 12, 12)
         self.set_auto_page_break(auto=True, margin=15)
+        # Always start with black text
+        self.set_text_color(0, 0, 0)
         try:
             self.alias_nb_pages()
         except Exception:
@@ -27,7 +28,8 @@ class Report(FPDF):
 
     def footer(self):
         self.set_y(-12)
-        self.set_font("Arial", "I", 9)
+        self.set_text_color(0, 0, 0)
+        self.set_font("Helvetica", "I", 9)  # force core font
         self.cell(0, 6, f"Page {self.page_no()}/{{nb}}", align="R")
 
     @property
@@ -35,20 +37,27 @@ class Report(FPDF):
         return self.w - self.l_margin - self.r_margin
 
 
-def _safe_set_font(pdf: Report, family="Arial", style="", size=11):
+def _font(pdf: Report, style="", size=11):
+    """Force a safe core font and black text each time (iOS-safe)."""
+    pdf.set_text_color(0, 0, 0)
     try:
-        pdf.set_font(family, style, size)
+        pdf.set_font("Helvetica", style, size)
     except Exception:
+        # fpdf core fonts always include Helvetica; this is just belt & suspenders
         pdf.set_font("Helvetica", style, size)
 
+
 def _h1(pdf: Report, text: str):
-    _safe_set_font(pdf, "Arial", "B", 18); pdf.cell(0, 10, text, ln=1)
+    _font(pdf, "B", 18)
+    pdf.cell(0, 10, text, ln=1)
 
 def _h2(pdf: Report, text: str):
-    _safe_set_font(pdf, "Arial", "B", 13); pdf.cell(0, 8, text, ln=1)
+    _font(pdf, "B", 13)
+    pdf.cell(0, 8, text, ln=1)
 
 def _body(pdf: Report, size=11):
-    _safe_set_font(pdf, "Arial", "", size)
+    _font(pdf, "", size)
+
 
 def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
     try:
@@ -59,34 +68,32 @@ def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
     except Exception:
         pass
 
+
 def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]],
                   key_w: float,
-                  val_w: float,
-                  key_style=("Arial", "B", 11),
-                  val_style=("Arial", "", 11)):
+                  val_w: float):
     def render(pdf: Report):
         for k, v in data:
-            try: pdf.set_font(*key_style)
-            except Exception: _safe_set_font(pdf, "Arial", "B", 11)
+            _font(pdf, "B", 11)
             pdf.cell(key_w, 6, str(k), align="L")
-            try: pdf.set_font(*val_style)
-            except Exception: _safe_set_font(pdf, "Arial", "", 11)
+            _body(pdf, 11)
             pdf.multi_cell(val_w, 6, str(v), align="L")
     return render
 
 
-# ---------- Chart ----------
 def _add_series_plot(pdf: Report,
                      series_dict: Dict[str, Sequence[float]],
                      title: str = "Repair Yield per Energy"):
     fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
     for label, series in series_dict.items():
         ax.plot(range(len(series)), list(series), label=label, linewidth=1.8)
-    ax.set_title(title); ax.set_xlabel("Index"); ax.set_ylabel("RYE")
-    ax.legend(loc="best", frameon=False); ax.grid(True, linewidth=0.3, alpha=0.6)
+    ax.set_title(title)
+    ax.set_xlabel("Index")
+    ax.set_ylabel("RYE")
+    ax.legend(loc="best", frameon=False)
+    ax.grid(True, linewidth=0.3, alpha=0.6)
     fig.tight_layout(pad=0.7)
 
-    # Save PNG to a temporary file (fpdf expects a filename)
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     try:
         fig.savefig(tmp.name, format="png", bbox_inches="tight", dpi=180)
@@ -99,7 +106,6 @@ def _add_series_plot(pdf: Report,
         except Exception: pass
 
 
-# ---------- Main builder ----------
 def build_pdf(
     rye: Iterable[float],
     summary: Dict[str, Union[float, int, str]],
@@ -110,38 +116,38 @@ def build_pdf(
 ) -> bytes:
     pdf = Report()
     pdf.add_page()
-    if logo_path: _add_logo(pdf, logo_path, w=22)
+    if logo_path:
+        _add_logo(pdf, logo_path, w=22)
 
     _h1(pdf, "RYE Report")
 
     generated = metadata.get("generated") or metadata.get("timestamp") or ""
     _body(pdf, 10)
-    if generated: pdf.cell(0, 6, f"Generated: {generated}", ln=1)
+    if generated:
+        pdf.cell(0, 6, f"Generated: {generated}", ln=1)
     pdf.ln(2)
 
-    # Dataset metadata
     _h2(pdf, "Dataset metadata")
     meta_rows: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in metadata.items():
-        if k in ("generated", "timestamp"):  # already shown
+        if k in ("generated", "timestamp"):
             continue
         meta_rows.append((k, f"{v:.3f}" if isinstance(v, float) else v))
     _key_val_rows(meta_rows, key_w=35, val_w=pdf.content_w - 35)(pdf)
     pdf.ln(2)
 
-    # Summary stats
-    _h2(pdf, "Summary statistics"); _body(pdf, 11)
+    _h2(pdf, "Summary statistics")
+    _body(pdf, 11)
     items: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in summary.items():
         items.append((k, f"{v:.3f}" if isinstance(v, float) else v))
     _key_val_rows(items, key_w=35, val_w=pdf.content_w - 35)(pdf)
     pdf.ln(2)
 
-    # Plot
-    if plot_series: _add_series_plot(pdf, plot_series)
+    if plot_series:
+        _add_series_plot(pdf, plot_series)
     pdf.ln(2)
 
-    # Sample values (first 100)
     _h2(pdf, "RYE sample values (first 100)")
     first_n = list(rye)[:100]
     left  = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 0]
@@ -161,7 +167,6 @@ def build_pdf(
         pdf.set_y(y0 + max(h_left, h_right))
     pdf.ln(2)
 
-    # Interpretation
     if not interpretation:
         mean = float(summary.get("mean", 0.0) or 0.0)
         minv = float(summary.get("min", 0.0) or 0.0)
@@ -174,11 +179,11 @@ def build_pdf(
             "and iterate TGRM loops (detect -> minimal fix -> verify) to lift average RYE "
             "and compress variance."
         )
-    _h2(pdf, "Interpretation"); _body(pdf, 11)
+    _h2(pdf, "Interpretation")
+    _body(pdf, 11)
     pdf.multi_cell(0, 6, interpretation, align="L")
     pdf.ln(4)
 
-    # Footer note
     _body(pdf, 10); pdf.cell(0, 6, "RYE.", ln=1)
     _body(pdf, 9)
     pdf.multi_cell(
@@ -188,11 +193,11 @@ def build_pdf(
         align="L"
     )
 
-    # Robust bytes output (avoid latin-1 issues)
     out = pdf.output(dest="S")
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
+    # fpdf classic returns str; utf-8 is fine on iOS
     try:
         return str(out).encode("utf-8")
     except Exception:
-        return str(out).encode("latin-1", errors="ignore")
+        return str(out).encode("latin-1", errors="replace")
