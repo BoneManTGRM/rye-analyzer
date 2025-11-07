@@ -1,17 +1,6 @@
-# RYE Analyzer — full upgraded build (fixed imports, same-folder modules)
-# Features:
-# - Single CSV analysis
-# - Optional second CSV for baseline vs enhanced comparison
-# - Rolling window
-# - Multi-domain plotting when a "domain" column exists
-# - Energy simulator (ΔEnergy)
-# - Scorecard and detailed stats
-# - Download CSV, JSON, and PDF report
-# - Example CSV generator
-# - Helpful footer/attribution
+# app_streamlit.py — RYE Analyzer (full upgraded build)
 
 from __future__ import annotations
-
 import io
 import json
 import numpy as np
@@ -19,27 +8,16 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# 👇 FIXED: import from local files in the SAME directory
-from core import (  # make sure core.py exposes these names
+# Local modules (same folder)
+from core import (
     compute_rye_from_df,
     rolling_series,
     safe_float,
     summarize_series,
 )
-
-try:
-    # report.py should expose build_pdf(...) and may be optional
-    from report import build_pdf  # returns bytes
-except Exception:
-    build_pdf = None
+from report import build_pdf  # returns bytes
 
 # ---------------- UI helpers ----------------
-def badge(text: str, color: str = "blue"):
-    st.markdown(
-        f"<span style='background:{color};color:white;padding:2px 6px;border-radius:6px;font-size:12px'>{text}</span>",
-        unsafe_allow_html=True,
-    )
-
 def section(title: str):
     st.subheader(title)
 
@@ -53,8 +31,9 @@ st.caption("Compute Repair Yield per Energy from any time series.")
 
 with st.expander("What is RYE"):
     st.write(
-        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful repair or performance gains. "
-        "Higher RYE means better efficiency. Use this tool to compute RYE from your CSV data and explore improvements."
+        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into "
+        "successful repair or performance gains. Higher RYE means better efficiency. "
+        "Upload a CSV to compute RYE and explore improvements, rolling windows, comparisons, and reports."
     )
 
 # ---------------- Sidebar ----------------
@@ -75,7 +54,7 @@ with st.sidebar:
     window = st.number_input("Rolling window", min_value=1, max_value=500, value=10, step=1)
 
     st.divider()
-    st.write("Energy simulator")
+    st.write("Δ Energy simulator")
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
@@ -96,7 +75,7 @@ def load_csv(file) -> pd.DataFrame | None:
         return None
     try:
         df = pd.read_csv(file)
-        df.columns = [c.strip() for c in df.columns]  # normalize
+        df.columns = [str(c).strip() for c in df.columns]
         return df
     except Exception as e:
         st.error(f"Could not read CSV. {e}")
@@ -111,7 +90,6 @@ def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
     return True
 
 def compute_block(df: pd.DataFrame, label: str, sim_mult: float) -> dict:
-    # simulate energy
     df_sim = df.copy()
     if col_energy in df_sim.columns:
         df_sim[col_energy] = df_sim[col_energy].apply(lambda x: safe_float(x) * sim_mult)
@@ -149,25 +127,22 @@ with tab1:
             rye_roll = block["rye_roll"]
             summary = block["summary"]
 
-            # scorecard
-            st.metric("RYE score (mean)", f"{summary['mean']:.4f}", help="Average RYE across rows")
+            # Scorecard
+            st.metric("Mean RYE", f"{summary['mean']:.4f}", help="Average RYE across rows")
 
-            # columns list
-            st.write("Columns:")
-            st.json(list(df1.columns))
+            # Column preview
+            with st.expander("Columns detected"):
+                st.json(list(df1.columns))
 
-            # line charts
-            fig = px.line(rye, title="RYE")
-            st.plotly_chart(fig, use_container_width=True)
+            # Charts
+            st.plotly_chart(px.line(rye, title="RYE"), use_container_width=True)
+            st.plotly_chart(px.line(rye_roll, title=f"RYE (rolling window = {window})"), use_container_width=True)
 
-            fig2 = px.line(rye_roll, title=f"RYE rolling window = {window}")
-            st.plotly_chart(fig2, use_container_width=True)
-
-            # summary
+            # Summary JSON
             section("Summary")
             st.code(json.dumps(summary, indent=2))
 
-            # downloads
+            # Downloads
             csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
             st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv")
 
@@ -209,7 +184,6 @@ with tab3:
         if col_domain not in df1.columns:
             st.info(f"No domain column named '{col_domain}' found.")
         elif ensure_columns(df1, col_repair, col_energy):
-            # compute rye per row, then attach to df for plotting
             block = compute_block(df1, "primary", sim_factor)
             dfp = block["df"].copy()
             dfp["RYE"] = block["rye"]
@@ -228,17 +202,35 @@ with tab4:
         if ensure_columns(df1, col_repair, col_energy):
             block = compute_block(df1, "primary", sim_factor)
             rye = block["rye"]
+            rye_roll = block["rye_roll"]
             summary = block["summary"]
 
             st.write("Build a portable report to share with teams.")
             colx, coly = st.columns(2)
             with colx:
                 if st.button("Generate PDF report", use_container_width=True):
-                    if build_pdf is None:
-                        st.error("PDF generator not available. Make sure report.py is present and fpdf2 is listed in requirements.txt")
-                    else:
-                        pdf_bytes = build_pdf(list(rye), summary, title="RYE Report")
-                        st.download_button("Download RYE report PDF", pdf_bytes, file_name="rye_report.pdf", mime="application/pdf")
+                    meta = {
+                        "rows": len(block["df"]),
+                        "columns": ", ".join(list(block["df"].columns)),
+                        "repair_col": col_repair,
+                        "energy_col": col_energy,
+                        "rolling_window": window,
+                        "energy_multiplier": sim_factor,
+                    }
+                    pdf_bytes = build_pdf(
+                        list(rye),
+                        summary,
+                        title="RYE Report",
+                        metadata=meta,
+                        plot_series={"rye": list(rye), "rye_roll": list(rye_roll)},
+                    )
+                    st.download_button(
+                        "Download RYE report PDF",
+                        pdf_bytes,
+                        file_name="rye_report.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
             with coly:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
                 st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
