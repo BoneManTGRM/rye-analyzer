@@ -1,65 +1,55 @@
-# report.py — Absolute-safe PDF generator (no width errors, UTF-8 guard, clean fallback)
-from datetime import datetime
+# report.py
 from fpdf import FPDF
-import io, matplotlib.pyplot as plt, textwrap, re
+import io
+from datetime import datetime
 
-PAGE_MARGIN = 15
-MAX_LINE_LEN = 100  # shorter width to guarantee fit
+LEFT = 12
+RIGHT = 12
+TOP = 12
+LINE = 6
 
-class PDF(FPDF):
-    def header(self):
-        self.set_font("Helvetica", "B", 16)
-        self.cell(0, 10, "RYE Report", ln=True, align="L")
-        self.ln(4)
+def _safe_text(x):
+    # Avoid non latin-1 characters for FPDF
+    return str(x).encode("latin-1", "replace").decode("latin-1")
 
-def _make_plot_png(rye_series, rye_roll=None) -> bytes:
-    fig = plt.figure(figsize=(7, 3))
-    ax = plt.gca()
-    ax.plot(rye_series, label="RYE", linewidth=1.5)
-    if rye_roll is not None:
-        ax.plot(rye_roll, label="RYE (rolling)", linewidth=1.5)
-    ax.set_xlabel("Index")
-    ax.set_ylabel("RYE")
-    ax.set_title("Repair Yield per Energy")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="best")
-    buf = io.BytesIO()
-    plt.tight_layout()
-    fig.savefig(buf, format="png", dpi=160)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.getvalue()
+def _kv_block(pdf, pairs, col_gap=6):
+    """
+    Render key-value pairs in two columns with wrapping.
+    pairs is a list of (key, value)
+    """
+    content_w = pdf.w - pdf.l_margin - pdf.r_margin
+    col_w = (content_w - col_gap) / 2.0
 
-def _clean_text(txt: str) -> str:
-    """Strip control chars, wrap long lines, ensure Latin-1 safety."""
-    if not txt:
-        return ""
-    txt = str(txt)
-    txt = re.sub(r"[\x00-\x1F\x7F\u200B\u200C\u200D\uFEFF]", "", txt)
-    txt = txt.replace("\t", " ").strip()
-    lines = []
-    for raw_line in txt.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        for wrapped in textwrap.wrap(line, MAX_LINE_LEN):
-            # encode to latin-1 ignoring unsupported chars
-            safe = wrapped.encode("latin-1", errors="ignore").decode("latin-1")
-            if safe:
-                lines.append(safe)
-    return "\n".join(lines)
+    left_pairs = pairs[0::2]
+    right_pairs = pairs[1::2]
+    rows = max(len(left_pairs), len(right_pairs))
 
-def _safe_multicell(pdf: FPDF, text: str):
-    """Wrapper that never throws width errors."""
-    for part in _clean_text(text).split("\n"):
-        if not part:
-            continue
-        try:
-            pdf.multi_cell(0, 6, part, align="L")
-        except Exception:
-            # if still fails, fall back to truncated single cell
-            safe = part[:MAX_LINE_LEN].encode("latin-1", errors="ignore").decode("latin-1")
-            pdf.cell(0, 6, safe, ln=True)
+    for i in range(rows):
+        x_start = pdf.get_x()
+        y_start = pdf.get_y()
+
+        # left cell
+        if i < len(left_pairs):
+            k, v = left_pairs[i]
+            pdf.set_font("Arial", "B", 11)
+            pdf.multi_cell(col_w, LINE, _safe_text(k))
+            pdf.set_font("Arial", "", 11)
+            pdf.multi_cell(col_w, LINE, _safe_text(v))
+        # compute left cell height used
+        h_left = pdf.get_y() - y_start
+
+        # right cell
+        pdf.set_xy(x_start + col_w + col_gap, y_start)
+        if i < len(right_pairs):
+            k, v = right_pairs[i]
+            pdf.set_font("Arial", "B", 11)
+            pdf.multi_cell(col_w, LINE, _safe_text(k))
+            pdf.set_font("Arial", "", 11)
+            pdf.multi_cell(col_w, LINE, _safe_text(v))
+        h_right = pdf.get_y() - y_start
+
+        # move to next row
+        pdf.set_xy(x_start, y_start + max(h_left, h_right) + 2)
 
 def build_pdf(
     rye_series,
@@ -67,60 +57,76 @@ def build_pdf(
     title: str = "RYE Report",
     metadata: dict | None = None,
     plot_series: dict | None = None,
-) -> bytes:
-    pdf = PDF()
-    pdf.set_auto_page_break(auto=True, margin=PAGE_MARGIN)
+    interpretation_text: str | None = None,
+):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=TOP)
     pdf.add_page()
+    pdf.set_margins(LEFT, TOP, RIGHT)
 
-    pdf.set_font("Helvetica", "B", 15)
-    pdf.cell(0, 9, title, ln=True)
-    pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 7, f"Generated: {datetime.utcnow().isoformat()}Z", ln=True)
-    pdf.ln(3)
-
-    if metadata:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(0, 8, "Dataset metadata", ln=True)
-        pdf.set_font("Helvetica", "", 11)
-        for k, v in metadata.items():
-            _safe_multicell(pdf, f"{k}: {v}")
-        pdf.ln(2)
-
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 8, "Summary statistics", ln=True)
-    pdf.set_font("Helvetica", "", 11)
-    for k in ["mean", "median", "max", "min", "count"]:
-        v = summary.get(k, "")
-        _safe_multicell(pdf, f"{k}: {v}")
+    # Header
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, _safe_text(title), ln=True)
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(0, 8, _safe_text(f"Generated: {datetime.utcnow().isoformat()}Z"), ln=True)
     pdf.ln(2)
 
-    try:
-        png_bytes = _make_plot_png(
-            plot_series.get("rye", rye_series),
-            plot_series.get("rye_roll") if plot_series else None,
-        )
-        img_buf = io.BytesIO(png_bytes)
-        pdf.image(img_buf, w=pdf.w - 2 * PAGE_MARGIN)
+    # Dataset metadata
+    if metadata:
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, "Dataset metadata", ln=True)
+        pdf.set_font("Arial", "", 11)
+        pairs = [(k.replace("_"," "), str(v)) for k, v in metadata.items()]
+        _kv_block(pdf, pairs)
         pdf.ln(2)
-    except Exception as e:
-        _safe_multicell(pdf, f"[Chart rendering failed: {e}]")
 
-    pdf.set_font("Helvetica", "B", 12)
+    # Summary stats
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, "Summary statistics", ln=True)
+    pdf.set_font("Arial", "", 11)
+    pairs = [
+        ("mean", f"{summary.get('mean', 0):.6f}"),
+        ("median", f"{summary.get('median', 0):.6f}"),
+        ("max", f"{summary.get('max', 0):.6f}"),
+        ("min", f"{summary.get('min', 0):.6f}"),
+        ("count", str(summary.get('count', 0))),
+    ]
+    _kv_block(pdf, pairs)
+    pdf.ln(2)
+
+    # Interpretation
+    if interpretation_text:
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, "Interpretation", ln=True)
+        pdf.set_font("Arial", "", 11)
+        content_w = pdf.w - pdf.l_margin - pdf.r_margin
+        pdf.multi_cell(content_w, LINE, _safe_text(interpretation_text))
+        pdf.ln(2)
+
+    # Sample values (first 100)
+    pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "RYE sample values (first 100)", ln=True)
-    pdf.set_font("Helvetica", "", 11)
-    for i, val in enumerate(list(rye_series)[:100]):
-        _safe_multicell(pdf, f"{i}: {val}")
-    pdf.ln(4)
+    pdf.set_font("Arial", "", 11)
+    content_w = pdf.w - pdf.l_margin - pdf.r_margin
+    text = "\n".join([f"{i}: {v}" for i, v in list(enumerate(rye_series))[:100]])
+    pdf.multi_cell(content_w, LINE, _safe_text(text))
+    pdf.ln(2)
 
-    pdf.set_font("Helvetica", "I", 10)
-    footer = (
-        "Open science by Cody Ryan Jenkins (CC BY 4.0). "
-        "Learn more: Reparodynamics — RYE (Repair Yield per Energy)."
+    # Footer
+    pdf.ln(2)
+    pdf.set_font("Arial", "I", 10)
+    pdf.multi_cell(
+        content_w,
+        LINE,
+        _safe_text(
+            "Open science by Cody Ryan Jenkins (CC BY 4.0). "
+            "Learn more: Reparodynamics  RYE  Repair Yield per Energy"
+        ),
     )
-    _safe_multicell(pdf, footer)
 
-    buf = io.BytesIO()
-    pdf.output(buf)
-    pdf_bytes = buf.getvalue()
-    buf.close()
+    # Output to bytes, compatible with fpdf and fpdf2
+    try:
+        pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    except Exception:
+        pdf_bytes = pdf.output(dest="S")
     return pdf_bytes
