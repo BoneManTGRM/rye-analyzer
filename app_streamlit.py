@@ -16,7 +16,6 @@ from core import (
     safe_float,
     summarize_series,
 )
-
 try:
     from report import build_pdf  # returns bytes
 except Exception:
@@ -42,9 +41,8 @@ st.caption("Compute Repair Yield per Energy from any time series.")
 
 with st.expander("What is RYE"):
     st.write(
-        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful "
-        "repair or performance gains. Higher RYE means better efficiency. Upload a CSV to compute RYE and explore "
-        "rolling windows, comparisons, and reports."
+        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful repair or performance gains. "
+        "Higher RYE means better efficiency. Upload a CSV to compute RYE and explore rolling windows, comparisons, and reports."
     )
 
 # ---------------- Sidebar ----------------
@@ -126,12 +124,10 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
     min_v  = float(summary.get("min", 0) or 0)
 
     lines = []
-    lines.append(
-        f"Average efficiency (RYE mean) is {mean_v:.3f}. "
-        f"Values typically range between {min_v:.3f} and {max_v:.3f} across the dataset."
-    )
+    lines.append(f"Average efficiency (RYE mean) is {mean_v:.3f}. "
+                 f"Values typically range between {min_v:.3f} and {max_v:.3f} across the dataset.")
     if mean_v > 1.0:
-        lines.append("On average, each unit of energy returned more than one unit of repair—an excellent efficiency level.")
+        lines.append("On average, each unit of energy returned more than one unit of repair — an excellent efficiency level.")
     elif mean_v > 0.5:
         lines.append("Efficiency is solid; small process changes that reduce energy or boost repair should lift the mean further.")
     else:
@@ -144,10 +140,8 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
         else:
             lines.append(f"An energy up-scaling factor of {sim_mult:.2f} was simulated; RYE may fall unless repair improved proportionally.")
 
-    lines.append(
-        "Next steps: identify spikes/dips in the RYE curve, map them to events or interventions, and iterate "
-        "TGRM loops (detect → minimal fix → verify) to raise average RYE."
-    )
+    lines.append("Next steps: identify spikes/dips in the RYE curve, map them to events or interventions, "
+                 "and iterate TGRM loops (detect -> minimal fix -> verify) to raise average RYE.")
     return " ".join(lines)
 
 # ---------------- Main UI ----------------
@@ -254,41 +248,27 @@ with tab4:
             }
             interp = make_interpretation(summary, window, sim_factor)
 
-            # persist last generated PDF so the download button doesn't vanish on rerun
-            pdf_key = "rye_pdf_bytes"
-
             colx, coly = st.columns(2)
             with colx:
                 if st.button("Generate PDF report", use_container_width=True):
                     if build_pdf is None:
-                        st.error("PDF generator not available. Ensure report.py exists and fpdf is in requirements.txt.")
+                        st.error("PDF generator not available. Make sure report.py is present and fpdf is in requirements.txt")
                     else:
-                        try:
-                            pdf_bytes = build_pdf(
-                                list(rye),
-                                summary,
-                                title="RYE Report",
-                                meta=meta,
-                                plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
-                                interpretation=interp,
-                            )
-                            if not isinstance(pdf_bytes, (bytes, bytearray)):
-                                st.error("PDF generator returned non-bytes. Check report.build_pdf.")
-                            else:
-                                st.session_state[pdf_key] = bytes(pdf_bytes)
-                                st.success("PDF generated. Use the button below to download.")
-                        except Exception as e:
-                            st.error(f"PDF generation failed: {e}")
-
-                if pdf_key in st.session_state:
-                    st.download_button(
-                        "Download RYE report PDF",
-                        data=st.session_state[pdf_key],
-                        file_name="rye_report.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
-
+                        pdf_bytes = build_pdf(
+                            list(rye),
+                            summary,
+                            metadata=meta,
+                            title="RYE Report",
+                            plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
+                            interpretation=interp,
+                        )
+                        st.download_button(
+                            "Download RYE report PDF",
+                            data=pdf_bytes,
+                            file_name="rye_report.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
             with coly:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
                 st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
