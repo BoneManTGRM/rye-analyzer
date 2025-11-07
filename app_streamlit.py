@@ -2,32 +2,20 @@
 # RYE Analyzer — full upgraded build with PDF interpretation
 
 from __future__ import annotations
-import io
-import json
+import io, json
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 # Local helpers
-from core import (
-    compute_rye_from_df,
-    rolling_series,
-    safe_float,
-    summarize_series,
-)
+from core import compute_rye_from_df, rolling_series, safe_float, summarize_series
 try:
     from report import build_pdf  # returns bytes
 except Exception:
     build_pdf = None
 
 # ---------------- UI helpers ----------------
-def badge(text: str, color: str = "blue"):
-    st.markdown(
-        f"<span style='background:{color};color:white;padding:2px 6px;border-radius:6px;font-size:12px'>{text}</span>",
-        unsafe_allow_html=True,
-    )
-
 def section(title: str):
     st.subheader(title)
 
@@ -57,7 +45,7 @@ with st.sidebar:
     st.write("Column names in your CSV")
     col_repair = st.text_input("Repair column", value="performance")
     col_energy = st.text_input("Energy column", value="energy")
-    col_time = st.text_input("Time column (optional)", value="time")
+    col_time   = st.text_input("Time column (optional)", value="time")
     col_domain = st.text_input("Domain column (optional)", value="domain")
 
     st.divider()
@@ -68,13 +56,13 @@ with st.sidebar:
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
-    st.write("No CSV yet?")
+    st.write("No CSV yet")
     if st.button("Download example CSV"):
         example = pd.DataFrame({
             "time": np.arange(0, 15),
             "domain": ["AI"] * 5 + ["Bio"] * 5 + ["Robotics"] * 5,
             "performance": [0, 0, 0.1, 0.2, 0.35, 0.38, 0.5, 0.46, 0.52, 0.6, 0.6, 0.6, 0.62, 0.62, 0.65],
-            "energy":      [1, 1, 1, 1,    1,    1.1, 1.0, 1.02, 1.05, 1.1, 1.1, 1.12, 1.09, 1.1, 1.1],
+            "energy":      [1, 1, 1, 1, 1, 1.1, 1.0, 1.02, 1.05, 1.1, 1.1, 1.12, 1.09, 1.1, 1.1],
         })
         b = example.to_csv(index=False).encode("utf-8")
         st.download_button("Save example.csv", b, file_name="example.csv", mime="text/csv")
@@ -253,25 +241,22 @@ with tab4:
             with colx:
                 if st.button("Generate PDF report", use_container_width=True):
                     if build_pdf is None:
-                        st.error("PDF generator not available. Make sure report.py is present and fpdf is in requirements.txt")
+                        st.error("PDF generator not available. Ensure report.py exists and fpdf is in requirements.txt")
                     else:
-                        try:
-                            pdf_bytes = build_pdf(
-                                rye=list(rye),
-                                summary=summary,
-                                metadata=metadata,
-                                plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
-                                interpretation=interp,
-                            )
-                            st.download_button(
-                                "Download RYE report PDF",
-                                data=pdf_bytes,
-                                file_name="rye_report.pdf",
-                                mime="application/pdf",
-                                use_container_width=True,
-                            )
-                        except Exception as e:
-                            st.error(f"PDF generation failed: {e}")
+                        pdf_bytes = build_pdf(
+                            list(rye),
+                            summary,
+                            metadata=metadata,
+                            plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
+                            interpretation=interp,
+                        )
+                        st.download_button(
+                            "Download RYE report PDF",
+                            data=pdf_bytes,
+                            file_name="rye_report.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
             with coly:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
                 st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
