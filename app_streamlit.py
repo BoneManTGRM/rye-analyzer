@@ -1,16 +1,17 @@
-# RYE Analyzer — full upgraded build
+# RYE Analyzer — full upgraded build (fixed imports, same-folder modules)
 # Features:
 # - Single CSV analysis
 # - Optional second CSV for baseline vs enhanced comparison
 # - Rolling window
-# - Multi domain plotting when a "domain" column exists
-# - Energy simulator
+# - Multi-domain plotting when a "domain" column exists
+# - Energy simulator (ΔEnergy)
 # - Scorecard and detailed stats
 # - Download CSV, JSON, and PDF report
 # - Example CSV generator
-# - Helpful sidebar with links
+# - Helpful footer/attribution
 
 from __future__ import annotations
+
 import io
 import json
 import numpy as np
@@ -18,15 +19,17 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# Local helpers
-from rye_analyzer.core import (
+# 👇 FIXED: import from local files in the SAME directory
+from core import (  # make sure core.py exposes these names
     compute_rye_from_df,
     rolling_series,
     safe_float,
     summarize_series,
 )
+
 try:
-    from rye_analyzer.report import build_pdf  # returns bytes
+    # report.py should expose build_pdf(...) and may be optional
+    from report import build_pdf  # returns bytes
 except Exception:
     build_pdf = None
 
@@ -59,14 +62,14 @@ with st.sidebar:
     st.header("Inputs")
     st.write("Upload one CSV to analyze. Optionally upload a second CSV to compare.")
     file1 = st.file_uploader("Primary CSV", type=["csv"], key="csv1")
-    file2 = st.file_uploader("Comparison CSV optional", type=["csv"], key="csv2")
+    file2 = st.file_uploader("Comparison CSV (optional)", type=["csv"], key="csv2")
 
     st.divider()
     st.write("Column names in your CSV")
     col_repair = st.text_input("Repair column", value="performance")
     col_energy = st.text_input("Energy column", value="energy")
-    col_time = st.text_input("Time column optional", value="time")
-    col_domain = st.text_input("Domain column optional", value="domain")
+    col_time = st.text_input("Time column (optional)", value="time")
+    col_domain = st.text_input("Domain column (optional)", value="domain")
 
     st.divider()
     window = st.number_input("Rolling window", min_value=1, max_value=500, value=10, step=1)
@@ -76,7 +79,7 @@ with st.sidebar:
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
-    st.write("No CSV yet")
+    st.write("No CSV yet?")
     if st.button("Download example CSV"):
         example = pd.DataFrame({
             "time": np.arange(0, 15),
@@ -93,8 +96,7 @@ def load_csv(file) -> pd.DataFrame | None:
         return None
     try:
         df = pd.read_csv(file)
-        # normalize column names for easier matching
-        df.columns = [c.strip() for c in df.columns]
+        df.columns = [c.strip() for c in df.columns]  # normalize
         return df
     except Exception as e:
         st.error(f"Could not read CSV. {e}")
@@ -148,7 +150,7 @@ with tab1:
             summary = block["summary"]
 
             # scorecard
-            st.metric("RYE score mean", f"{summary['mean']:.4f}", help="Average RYE across rows")
+            st.metric("RYE score (mean)", f"{summary['mean']:.4f}", help="Average RYE across rows")
 
             # columns list
             st.write("Columns:")
@@ -158,7 +160,7 @@ with tab1:
             fig = px.line(rye, title="RYE")
             st.plotly_chart(fig, use_container_width=True)
 
-            fig2 = px.line(rye_roll, title=f"RYE rolling window {window}")
+            fig2 = px.line(rye_roll, title=f"RYE rolling window = {window}")
             st.plotly_chart(fig2, use_container_width=True)
 
             # summary
@@ -189,7 +191,7 @@ with tab2:
             colA, colB, colC = st.columns(3)
             colA.metric("Mean RYE A", f"{s1:.4f}")
             colB.metric("Mean RYE B", f"{s2:.4f}")
-            colC.metric("Delta", f"{delta:.4f}", f"{pct:.2f}%")
+            colC.metric("Δ (B - A)", f"{delta:.4f}", f"{pct:.2f}%")
 
             fig = px.line(b1["rye"], title="RYE comparison")
             fig.add_scatter(y=b2["rye"], mode="lines", name="B")
@@ -233,7 +235,7 @@ with tab4:
             with colx:
                 if st.button("Generate PDF report", use_container_width=True):
                     if build_pdf is None:
-                        st.error("PDF generator not available. Make sure report.py is present and fpdf is in requirements.txt")
+                        st.error("PDF generator not available. Make sure report.py is present and fpdf2 is listed in requirements.txt")
                     else:
                         pdf_bytes = build_pdf(list(rye), summary, title="RYE Report")
                         st.download_button("Download RYE report PDF", pdf_bytes, file_name="rye_report.pdf", mime="application/pdf")
