@@ -271,13 +271,17 @@ def build_pdf(
         align="L"
     )
 
-    # Output bytes (latin-1 fallback for fpdf)
+      # --- Output as bytes, ensuring UTF-8 fallback ---
     try:
-        data = pdf.output(dest="S").encode("latin-1")
-    except AttributeError:
-        out = pdf.output(dest="S")
-        data = out if isinstance(out, (bytes, bytearray)) else str(out).encode("utf-8")
-    except TypeError:
-        data = pdf.output(dest="S")
+        raw = pdf.output(dest="S")
+        if isinstance(raw, (bytes, bytearray)):
+            data = raw
+        else:
+            try:
+                data = raw.encode("latin-1", "replace")  # safely replaces unsupported chars
+            except Exception:
+                data = raw.encode("utf-8", "replace")
+    except Exception:
+        data = pdf.output(dest="S").encode("utf-8", "replace")
 
     return data
