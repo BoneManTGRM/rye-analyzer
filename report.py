@@ -34,12 +34,10 @@ def build_pdf(rye_series, summary: dict, title="RYE Report"):
     pdf.set_font("Arial", "I", 10)
     pdf.multi_cell(0, 6, "Open science by Cody Ryan Jenkins. CC BY 4.0")
 
-    # Output handling: ensure byte-safe for both fpdf and fpdf2
-    try:
-        pdf_bytes = pdf.output(dest="S").encode("latin-1")
-    except AttributeError:
-        pdf_bytes = pdf.output(dest="S").encode("utf-8")
-    except TypeError:
-        pdf_bytes = pdf.output(dest="S")
-
-    return pdf_bytes
+   # Output handling: fully Streamlit-safe (writes to memory, not disk)
+import io
+buf = io.BytesIO()
+pdf.output(buf)
+pdf_bytes = buf.getvalue()
+buf.close()
+return pdf_bytes
