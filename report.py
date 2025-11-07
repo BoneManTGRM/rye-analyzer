@@ -1,25 +1,30 @@
 # report.py
+# Build a compact, multi-page PDF report for RYE analyses.
+
 from __future__ import annotations
 import io, os, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 
 try:
-    from fpdf import FPDF
+    from fpdf import FPDF  # works for fpdf and fpdf2
 except Exception as e:
     raise RuntimeError("fpdf/fpdf2 is required. Add 'fpdf>=1.7.2' to requirements.txt") from e
 
 
+# -----------------------------
+# PDF helpers
+# -----------------------------
+
 class Report(FPDF):
-    """A4 portrait with margins, auto page breaks, footer page numbers."""
+    """A4 portrait with margins, auto page breaks, and footer page numbers."""
     def __init__(self):
         super().__init__(orientation="P", unit="mm", format="A4")
         self.set_margins(12, 12, 12)
         self.set_auto_page_break(auto=True, margin=15)
-        # Always start with black text
         self.set_text_color(0, 0, 0)
         try:
             self.alias_nb_pages()
@@ -29,7 +34,7 @@ class Report(FPDF):
     def footer(self):
         self.set_y(-12)
         self.set_text_color(0, 0, 0)
-        self.set_font("Helvetica", "I", 9)  # force core font
+        self.set_font("Helvetica", "I", 9)
         self.cell(0, 6, f"Page {self.page_no()}/{{nb}}", align="R")
 
     @property
@@ -37,29 +42,28 @@ class Report(FPDF):
         return self.w - self.l_margin - self.r_margin
 
 
-def _font(pdf: Report, style="", size=11):
-    """Force a safe core font and black text each time (iOS-safe)."""
+def _font(pdf: Report, style: str = "", size: int = 11):
+    """Always use a core font and reset text color to black."""
     pdf.set_text_color(0, 0, 0)
-    try:
-        pdf.set_font("Helvetica", style, size)
-    except Exception:
-        # fpdf core fonts always include Helvetica; this is just belt & suspenders
-        pdf.set_font("Helvetica", style, size)
+    pdf.set_font("Helvetica", style, size)
 
 
 def _h1(pdf: Report, text: str):
     _font(pdf, "B", 18)
     pdf.cell(0, 10, text, ln=1)
 
+
 def _h2(pdf: Report, text: str):
     _font(pdf, "B", 13)
     pdf.cell(0, 8, text, ln=1)
 
-def _body(pdf: Report, size=11):
+
+def _body(pdf: Report, size: int = 11):
     _font(pdf, "", size)
 
 
 def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
+    """Add a top-right logo if present (non-fatal if missing)."""
     try:
         if os.path.exists(path):
             x = pdf.w - pdf.r_margin - w
@@ -69,9 +73,12 @@ def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
         pass
 
 
-def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]],
-                  key_w: float,
-                  val_w: float):
+def _key_val_rows(
+    data: List[Tuple[str, Union[str, float, int]]],
+    key_w: float,
+    val_w: float,
+):
+    """Renderer that prints aligned key:value rows within the given widths."""
     def render(pdf: Report):
         for k, v in data:
             _font(pdf, "B", 11)
@@ -81,12 +88,18 @@ def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]],
     return render
 
 
+# -----------------------------
+# Chart
+# -----------------------------
+
 def _add_series_plot(pdf: Report,
                      series_dict: Dict[str, Sequence[float]],
                      title: str = "Repair Yield per Energy"):
+    """Render a simple line chart into the PDF using matplotlib."""
     fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
     for label, series in series_dict.items():
         ax.plot(range(len(series)), list(series), label=label, linewidth=1.8)
+
     ax.set_title(title)
     ax.set_xlabel("Index")
     ax.set_ylabel("RYE")
@@ -94,17 +107,25 @@ def _add_series_plot(pdf: Report,
     ax.grid(True, linewidth=0.3, alpha=0.6)
     fig.tight_layout(pad=0.7)
 
+    # Save to a real temporary file (fpdf is happiest with paths)
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     try:
         fig.savefig(tmp.name, format="png", bbox_inches="tight", dpi=180)
     finally:
         plt.close(fig)
+
     try:
         pdf.image(tmp.name, w=pdf.content_w)
     finally:
-        try: os.unlink(tmp.name)
-        except Exception: pass
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
+
+# -----------------------------
+# Main builder
+# -----------------------------
 
 def build_pdf(
     rye: Iterable[float],
@@ -114,19 +135,23 @@ def build_pdf(
     interpretation: Optional[str] = None,
     logo_path: Optional[str] = None,
 ) -> bytes:
+    """
+    Build a multi-section PDF and return bytes.
+    """
     pdf = Report()
     pdf.add_page()
     if logo_path:
         _add_logo(pdf, logo_path, w=22)
 
+    # Title + timestamp
     _h1(pdf, "RYE Report")
-
     generated = metadata.get("generated") or metadata.get("timestamp") or ""
     _body(pdf, 10)
     if generated:
         pdf.cell(0, 6, f"Generated: {generated}", ln=1)
     pdf.ln(2)
 
+    # Dataset metadata
     _h2(pdf, "Dataset metadata")
     meta_rows: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in metadata.items():
@@ -136,18 +161,20 @@ def build_pdf(
     _key_val_rows(meta_rows, key_w=35, val_w=pdf.content_w - 35)(pdf)
     pdf.ln(2)
 
+    # Summary statistics
     _h2(pdf, "Summary statistics")
-    _body(pdf, 11)
     items: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in summary.items():
         items.append((k, f"{v:.3f}" if isinstance(v, float) else v))
     _key_val_rows(items, key_w=35, val_w=pdf.content_w - 35)(pdf)
     pdf.ln(2)
 
+    # Plot
     if plot_series:
         _add_series_plot(pdf, plot_series)
     pdf.ln(2)
 
+    # Sample values
     _h2(pdf, "RYE sample values (first 100)")
     first_n = list(rye)[:100]
     left  = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 0]
@@ -167,6 +194,7 @@ def build_pdf(
         pdf.set_y(y0 + max(h_left, h_right))
     pdf.ln(2)
 
+    # Interpretation (ASCII-safe arrow)
     if not interpretation:
         mean = float(summary.get("mean", 0.0) or 0.0)
         minv = float(summary.get("min", 0.0) or 0.0)
@@ -184,6 +212,7 @@ def build_pdf(
     pdf.multi_cell(0, 6, interpretation, align="L")
     pdf.ln(4)
 
+    # Footer note
     _body(pdf, 10); pdf.cell(0, 6, "RYE.", ln=1)
     _body(pdf, 9)
     pdf.multi_cell(
@@ -193,11 +222,9 @@ def build_pdf(
         align="L"
     )
 
+    # Return exact bytes. For fpdf2, this is already bytes.
     out = pdf.output(dest="S")
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
-    # fpdf classic returns str; utf-8 is fine on iOS
-    try:
-        return str(out).encode("utf-8")
-    except Exception:
-        return str(out).encode("latin-1", errors="replace")
+    # Classic fpdf returns a Latin-1 string representing the PDF bytes.
+    return str(out).encode("latin-1", errors="replace")
