@@ -1,4 +1,5 @@
-# app_streamlit.py — RYE Analyzer (full upgraded build)
+# app_streamlit.py
+# RYE Analyzer — full upgraded build with PDF interpretation
 
 from __future__ import annotations
 import io
@@ -8,16 +9,25 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# Local modules (same folder)
+# Local helpers
 from core import (
     compute_rye_from_df,
     rolling_series,
     safe_float,
     summarize_series,
 )
-from report import build_pdf  # returns bytes
+try:
+    from report import build_pdf  # returns bytes
+except Exception:
+    build_pdf = None
 
 # ---------------- UI helpers ----------------
+def badge(text: str, color: str = "blue"):
+    st.markdown(
+        f"<span style='background:{color};color:white;padding:2px 6px;border-radius:6px;font-size:12px'>{text}</span>",
+        unsafe_allow_html=True,
+    )
+
 def section(title: str):
     st.subheader(title)
 
@@ -31,9 +41,8 @@ st.caption("Compute Repair Yield per Energy from any time series.")
 
 with st.expander("What is RYE"):
     st.write(
-        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into "
-        "successful repair or performance gains. Higher RYE means better efficiency. "
-        "Upload a CSV to compute RYE and explore improvements, rolling windows, comparisons, and reports."
+        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful repair or performance gains. "
+        "Higher RYE means better efficiency. Upload a CSV to compute RYE and explore rolling windows, comparisons, and reports."
     )
 
 # ---------------- Sidebar ----------------
@@ -41,24 +50,24 @@ with st.sidebar:
     st.header("Inputs")
     st.write("Upload one CSV to analyze. Optionally upload a second CSV to compare.")
     file1 = st.file_uploader("Primary CSV", type=["csv"], key="csv1")
-    file2 = st.file_uploader("Comparison CSV (optional)", type=["csv"], key="csv2")
+    file2 = st.file_uploader("Comparison CSV optional", type=["csv"], key="csv2")
 
     st.divider()
     st.write("Column names in your CSV")
     col_repair = st.text_input("Repair column", value="performance")
     col_energy = st.text_input("Energy column", value="energy")
-    col_time = st.text_input("Time column (optional)", value="time")
-    col_domain = st.text_input("Domain column (optional)", value="domain")
+    col_time = st.text_input("Time column optional", value="time")
+    col_domain = st.text_input("Domain column optional", value="domain")
 
     st.divider()
     window = st.number_input("Rolling window", min_value=1, max_value=500, value=10, step=1)
 
     st.divider()
-    st.write("Δ Energy simulator")
+    st.write("Energy simulator")
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
-    st.write("No CSV yet?")
+    st.write("No CSV yet")
     if st.button("Download example CSV"):
         example = pd.DataFrame({
             "time": np.arange(0, 15),
@@ -75,7 +84,7 @@ def load_csv(file) -> pd.DataFrame | None:
         return None
     try:
         df = pd.read_csv(file)
-        df.columns = [str(c).strip() for c in df.columns]
+        df.columns = [c.strip() for c in df.columns]
         return df
     except Exception as e:
         st.error(f"Could not read CSV. {e}")
@@ -109,14 +118,39 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float) -> dict:
         "summary_roll": summary_roll,
     }
 
+def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
+    mean_v = float(summary.get("mean", 0) or 0)
+    max_v  = float(summary.get("max", 0) or 0)
+    min_v  = float(summary.get("min", 0) or 0)
+
+    lines = []
+    lines.append(f"Average efficiency (RYE mean) is {mean_v:.3f}. "
+                 f"Values typically range between {min_v:.3f} and {max_v:.3f} across the dataset.")
+    if mean_v > 1.0:
+        lines.append("On average, each unit of energy returned more than one unit of repair—an excellent efficiency level.")
+    elif mean_v > 0.5:
+        lines.append("Efficiency is solid; small process changes that reduce energy or boost repair should lift the mean further.")
+    else:
+        lines.append("Efficiency is modest; look for high-energy, low-return segments to prune or repair.")
+
+    lines.append(f"The report used a rolling window of {window} to smooth short-term noise.")
+    if sim_mult != 1.0:
+        if sim_mult < 1.0:
+            lines.append(f"An energy down-scaling factor of {sim_mult:.2f} was simulated; RYE should increase under this scenario.")
+        else:
+            lines.append(f"An energy up-scaling factor of {sim_mult:.2f} was simulated; RYE may fall unless repair improved proportionally.")
+
+    lines.append("Next steps: identify spikes/dips in the RYE curve, map them to events or interventions, "
+                 "and iterate TGRM loops (detect → minimal fix → verify) to raise average RYE.")
+    return " ".join(lines)
+
 # ---------------- Main UI ----------------
 tab1, tab2, tab3, tab4 = st.tabs(["Single analysis", "Compare datasets", "Multi domain", "Reports"])
 
-# Load files
 df1 = load_csv(file1)
 df2 = load_csv(file2)
 
-# ---------- Tab 1: Single analysis ----------
+# ---------- Tab 1 ----------
 with tab1:
     if df1 is None:
         st.info("Upload a CSV in the sidebar to begin.")
@@ -127,29 +161,26 @@ with tab1:
             rye_roll = block["rye_roll"]
             summary = block["summary"]
 
-            # Scorecard
-            st.metric("Mean RYE", f"{summary['mean']:.4f}", help="Average RYE across rows")
+            st.metric("RYE score mean", f"{summary['mean']:.4f}", help="Average RYE across rows")
+            st.write("Columns:")
+            st.json(list(df1.columns))
 
-            # Column preview
-            with st.expander("Columns detected"):
-                st.json(list(df1.columns))
+            fig = px.line(rye, title="RYE")
+            st.plotly_chart(fig, use_container_width=True)
 
-            # Charts
-            st.plotly_chart(px.line(rye, title="RYE"), use_container_width=True)
-            st.plotly_chart(px.line(rye_roll, title=f"RYE (rolling window = {window})"), use_container_width=True)
+            fig2 = px.line(rye_roll, title=f"RYE rolling window {window}")
+            st.plotly_chart(fig2, use_container_width=True)
 
-            # Summary JSON
             section("Summary")
             st.code(json.dumps(summary, indent=2))
 
-            # Downloads
             csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
             st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv")
 
             json_bytes = io.BytesIO(json.dumps(summary, indent=2).encode("utf-8"))
             st.download_button("Download summary JSON", json_bytes.getvalue(), file_name="summary.json", mime="application/json")
 
-# ---------- Tab 2: Compare datasets ----------
+# ---------- Tab 2 ----------
 with tab2:
     if df1 is None or df2 is None:
         st.info("Upload two CSV files to compare.")
@@ -166,7 +197,7 @@ with tab2:
             colA, colB, colC = st.columns(3)
             colA.metric("Mean RYE A", f"{s1:.4f}")
             colB.metric("Mean RYE B", f"{s2:.4f}")
-            colC.metric("Δ (B - A)", f"{delta:.4f}", f"{pct:.2f}%")
+            colC.metric("Delta", f"{delta:.4f}", f"{pct:.2f}%")
 
             fig = px.line(b1["rye"], title="RYE comparison")
             fig.add_scatter(y=b2["rye"], mode="lines", name="B")
@@ -176,7 +207,7 @@ with tab2:
             fig2.add_scatter(y=b2["rye_roll"], mode="lines", name="B")
             st.plotly_chart(fig2, use_container_width=True)
 
-# ---------- Tab 3: Multi domain ----------
+# ---------- Tab 3 ----------
 with tab3:
     if df1 is None:
         st.info("Upload a CSV to see domain splits.")
@@ -194,7 +225,7 @@ with tab3:
                 fig = px.line(dfp, y="RYE", color=col_domain, title="RYE by domain")
             st.plotly_chart(fig, use_container_width=True)
 
-# ---------- Tab 4: Reports ----------
+# ---------- Tab 4 ----------
 with tab4:
     if df1 is None:
         st.info("Upload a CSV to generate a report.")
@@ -206,31 +237,38 @@ with tab4:
             summary = block["summary"]
 
             st.write("Build a portable report to share with teams.")
+
+            meta = {
+                "rows": len(df1),
+                "repair_col": col_repair,
+                "energy_col": col_energy,
+                "time_col": col_time if col_time in df1.columns else "",
+                "domain_col": col_domain if col_domain in df1.columns else "",
+                "rolling_window": window,
+            }
+            interp = make_interpretation(summary, window, sim_factor)
+
             colx, coly = st.columns(2)
             with colx:
                 if st.button("Generate PDF report", use_container_width=True):
-                    meta = {
-                        "rows": len(block["df"]),
-                        "columns": ", ".join(list(block["df"].columns)),
-                        "repair_col": col_repair,
-                        "energy_col": col_energy,
-                        "rolling_window": window,
-                        "energy_multiplier": sim_factor,
-                    }
-                    pdf_bytes = build_pdf(
-                        list(rye),
-                        summary,
-                        title="RYE Report",
-                        metadata=meta,
-                        plot_series={"rye": list(rye), "rye_roll": list(rye_roll)},
-                    )
-                    st.download_button(
-                        "Download RYE report PDF",
-                        pdf_bytes,
-                        file_name="rye_report.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
+                    if build_pdf is None:
+                        st.error("PDF generator not available. Make sure report.py is present and fpdf is in requirements.txt")
+                    else:
+                        pdf_bytes = build_pdf(
+                            list(rye),
+                            summary,
+                            title="RYE Report",
+                            meta=meta,
+                            plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
+                            interpretation=interp,
+                        )
+                        st.download_button(
+                            "Download RYE report PDF",
+                            data=pdf_bytes,
+                            file_name="rye_report.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
             with coly:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
                 st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
