@@ -17,41 +17,21 @@ try:
 except Exception as e:
     raise RuntimeError("fpdf/fpdf2 is required. Add 'fpdf>=1.7.2' to requirements.txt") from e
 
-
-# -----------------------------
-# Text / encoding helpers
-# -----------------------------
-
+# --------- Unicode normalization (avoid latin-1 crashes) ----------
 _REPLACEMENTS = {
-    # dashes
-    "\u2013": "-",  # en dash
-    "\u2014": "-",  # em dash
-    "\u2212": "-",  # minus sign
-    # quotes
+    "\u2013": "-", "\u2014": "-", "\u2212": "-",
     "\u2018": "'", "\u2019": "'", "\u201A": ",",
     "\u201C": '"', "\u201D": '"', "\u201E": '"',
-    # arrows / bullets / misc
     "\u2192": "->", "\u27A1": "->", "\u2022": "*", "\u00A0": " ",
 }
-
 def _to_pdf_text(x: Union[str, float, int]) -> str:
-    """Convert to a Latin-1 safe string for FPDF while preserving readability."""
     s = str(x) if not isinstance(x, str) else x
-    if not s:
-        return ""
-    # Replace common Unicode symbols with ASCII equivalents
     for u, a in _REPLACEMENTS.items():
         s = s.replace(u, a)
-    # Ensure it can be encoded in latin-1; drop anything still unsupported
     return s.encode("latin-1", "ignore").decode("latin-1")
 
-
-# -----------------------------
-# PDF base
-# -----------------------------
-
+# ---------------- PDF base ----------------
 class Report(FPDF):
-    """FPDF/FPDF2-compatible report with margins, auto page breaks, and footer page numbers."""
     def __init__(self):
         super().__init__(orientation="P", unit="mm", format="A4")
         self.set_margins(12, 12, 12)
@@ -70,30 +50,24 @@ class Report(FPDF):
     def content_w(self) -> float:
         return self.w - self.l_margin - self.r_margin
 
-
-def _safe_set_font(pdf: Report, family="Arial", style="", size=11):
+def _safe_set_font(pdf: "Report", family="Arial", style="", size=11):
     try:
         pdf.set_font(family, style, size)
     except Exception:
         pdf.set_font("Helvetica", style, size)
 
-
-def _h1(pdf: Report, text: str):
+def _h1(pdf: "Report", text: str):
     _safe_set_font(pdf, "Arial", "B", 18)
     pdf.cell(0, 10, _to_pdf_text(text), ln=1)
 
-
-def _h2(pdf: Report, text: str):
+def _h2(pdf: "Report", text: str):
     _safe_set_font(pdf, "Arial", "B", 13)
     pdf.cell(0, 8, _to_pdf_text(text), ln=1)
 
-
-def _body(pdf: Report, size=11):
+def _body(pdf: "Report", size=11):
     _safe_set_font(pdf, "Arial", "", size)
 
-
-def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
-    """Add a top-right logo if the file exists (non-fatal if missing)."""
+def _add_logo(pdf: "Report", path: str = "logo.png", w: float = 22.0):
     try:
         if os.path.exists(path):
             x = pdf.w - pdf.r_margin - w
@@ -102,45 +76,29 @@ def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
     except Exception:
         pass
 
-
-def _key_val_rows(
-    data: List[Tuple[str, Union[str, float, int]]],
-    key_w: float,
-    val_w: float,
-    key_style=("Arial", "B", 11),
-    val_style=("Arial", "", 11),
-) -> callable:
-    """Return a renderer that prints aligned key:value rows within the given widths."""
-    def render(pdf: Report):
+def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]],
+                  key_w: float,
+                  val_w: float,
+                  key_style=("Arial", "B", 11),
+                  val_style=("Arial", "", 11)) -> callable:
+    def render(pdf: "Report"):
         for k, v in data:
-            try:
-                pdf.set_font(*key_style)
-            except Exception:
-                _safe_set_font(pdf, "Arial", "B", 11)
+            try: pdf.set_font(*key_style)
+            except Exception: _safe_set_font(pdf, "Arial", "B", 11)
             pdf.cell(key_w, 6, _to_pdf_text(k), align="L")
 
-            try:
-                pdf.set_font(*val_style)
-            except Exception:
-                _safe_set_font(pdf, "Arial", "", 11)
+            try: pdf.set_font(*val_style)
+            except Exception: _safe_set_font(pdf, "Arial", "", 11)
             pdf.multi_cell(val_w, 6, _to_pdf_text(v), align="L")
     return render
 
-
-# -----------------------------
-# Chart
-# -----------------------------
-
-def _add_series_plot(
-    pdf: Report,
-    series_dict: Dict[str, Sequence[float]],
-    title: str = "Repair Yield per Energy",
-):
-    """Render a simple line chart with matplotlib and embed as PNG."""
+# ---------------- Chart ----------------
+def _add_series_plot(pdf: "Report",
+                     series_dict: Dict[str, Sequence[float]],
+                     title: str = "Repair Yield per Energy"):
     fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
     for label, series in series_dict.items():
         ax.plot(list(range(len(series))), list(series), label=_to_pdf_text(label), linewidth=1.8)
-
     ax.set_title(_to_pdf_text(title))
     ax.set_xlabel("Index")
     ax.set_ylabel("RYE")
@@ -153,39 +111,33 @@ def _add_series_plot(
     plt.close(fig)
     buf.seek(0)
 
-    # fpdf2 supports file-like objects; older fpdf prefers a name or BytesIO with .name
     try:
         pdf.image(buf, w=pdf.content_w)
     except TypeError:
         tmp = io.BytesIO(buf.getvalue())
-        setattr(tmp, "name", "plot.png")  # hint a name for older backends
+        setattr(tmp, "name", "plot.png")
         pdf.image(tmp, w=pdf.content_w)
 
-
-# -----------------------------
-# Main builder
-# -----------------------------
-
+# ---------------- Main builder ----------------
 def build_pdf(
     rye: Iterable[float],
     summary: Dict[str, Union[float, int, str]],
     metadata: Dict[str, Union[str, int, float]],
+    *,
+    title: str = "RYE Report",
     plot_series: Optional[Dict[str, Sequence[float]]] = None,
     interpretation: Optional[str] = None,
     logo_path: Optional[str] = None,
 ) -> bytes:
-    """
-    Build a multi-section PDF and return bytes.
-    """
+    """Build a multi-section PDF and return bytes."""
     pdf = Report()
     pdf.add_page()
     if logo_path:
         _add_logo(pdf, logo_path, w=22)
 
-    # Title
-    _h1(pdf, "RYE Report")
+    # Title (now uses the argument)
+    _h1(pdf, title)
 
-    # Generated timestamp (if provided)
     _body(pdf, 10)
     generated = metadata.get("generated") or metadata.get("timestamp") or ""
     if generated:
@@ -193,48 +145,40 @@ def build_pdf(
 
     pdf.ln(2)
 
-    # --- Dataset metadata
+    # Dataset metadata
     _h2(pdf, "Dataset metadata")
     meta_rows: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in metadata.items():
         if k in ("generated", "timestamp"):
             continue
-        if isinstance(v, float):
-            meta_rows.append((k, f"{v:.3f}"))
-        else:
-            meta_rows.append((k, v))
-    kv = _key_val_rows(meta_rows, key_w=35, val_w=pdf.content_w - 35)
-    kv(pdf)
+        meta_rows.append((k, f"{v:.3f}" if isinstance(v, float) else v))
+    _key_val_rows(meta_rows, key_w=35, val_w=pdf.content_w - 35)(pdf)
 
     pdf.ln(2)
 
-    # --- Summary statistics
+    # Summary statistics
     _h2(pdf, "Summary statistics")
     _body(pdf, 11)
     items: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in summary.items():
-        if isinstance(v, float):
-            items.append((k, f"{v:.3f}"))
-        else:
-            items.append((k, v))
-    kv2 = _key_val_rows(items, key_w=35, val_w=pdf.content_w - 35)
-    kv2(pdf)
+        items.append((k, f"{v:.3f}" if isinstance(v, float) else v))
+    _key_val_rows(items, key_w=35, val_w=pdf.content_w - 35)(pdf)
 
     pdf.ln(2)
 
-    # --- Plot
+    # Plot
     if plot_series:
         _add_series_plot(pdf, plot_series)
 
     pdf.ln(2)
 
-    # --- Sample values (first 100), two columns
+    # Sample values (first 100)
     _h2(pdf, "RYE sample values (first 100)")
     first_n = list(rye)[:100]
     left = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 0]
     right = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 1]
 
-    col_w = (pdf.content_w - 5) / 2  # 5 mm gutter
+    col_w = (pdf.content_w - 5) / 2
     _body(pdf, 11)
     max_lines = max(len(left), len(right))
     for idx in range(max_lines):
@@ -254,7 +198,7 @@ def build_pdf(
 
     pdf.ln(2)
 
-    # --- Interpretation (auto if not provided)
+    # Interpretation
     if not interpretation:
         mean = float(summary.get("mean", 0.0) or 0.0)
         minv = float(summary.get("min", 0.0) or 0.0)
@@ -267,14 +211,13 @@ def build_pdf(
             "and iterate TGRM loops (detect -> minimal fix -> verify) to lift average RYE "
             "and compress variance."
         )
-
     _h2(pdf, "Interpretation")
     _body(pdf, 11)
     pdf.multi_cell(0, 6, _to_pdf_text(interpretation), align="L")
 
     pdf.ln(4)
 
-    # --- Footer note
+    # Footer
     _body(pdf, 10)
     pdf.cell(0, 6, _to_pdf_text("RYE."), ln=1)
     _body(pdf, 9)
@@ -287,13 +230,12 @@ def build_pdf(
         align="L"
     )
 
-    # --- Output as bytes with safe fallbacks
+    # Output as bytes
     try:
         out = pdf.output(dest="S")
         if isinstance(out, (bytes, bytearray)):
             data = out
         else:
-            # Prefer latin-1 with replacement so fpdf stays happy; fall back to utf-8.
             try:
                 data = out.encode("latin-1", "replace")
             except Exception:
