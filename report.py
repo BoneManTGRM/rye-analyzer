@@ -1,10 +1,12 @@
-# report.py — Final Stable Unicode + Auto-Wrapping PDF Report for RYE Analyzer
+# report.py — Final Safe Version (auto-wrap + width limit + UTF-8 guard)
 from datetime import datetime
 from fpdf import FPDF
 import io
 import matplotlib.pyplot as plt
+import textwrap
 
 PAGE_MARGIN = 15  # mm
+MAX_LINE_LEN = 120  # wrap long metadata lines manually
 
 class PDF(FPDF):
     def header(self):
@@ -13,7 +15,6 @@ class PDF(FPDF):
         self.ln(4)
 
 def _make_plot_png(rye_series, rye_roll=None) -> bytes:
-    """Render a RYE chart to PNG bytes."""
     fig = plt.figure(figsize=(7, 3))
     ax = plt.gca()
     ax.plot(rye_series, label="RYE", linewidth=1.5)
@@ -30,6 +31,14 @@ def _make_plot_png(rye_series, rye_roll=None) -> bytes:
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
+
+def _safe_text(txt: str) -> str:
+    """Ensure safe encoding and manual wrapping."""
+    txt = str(txt)
+    lines = []
+    for line in txt.splitlines():
+        lines.extend(textwrap.wrap(line, MAX_LINE_LEN))
+    return "\n".join(lines)
 
 def build_pdf(
     rye_series,
@@ -55,8 +64,8 @@ def build_pdf(
         pdf.cell(0, 8, "Dataset metadata", ln=True)
         pdf.set_font("Helvetica", "", 11)
         for k, v in metadata.items():
-            # ✅ auto-wrap long text safely
-            pdf.multi_cell(0, 6, f"{k}: {v}", align="L")
+            text = _safe_text(f"{k}: {v}")
+            pdf.multi_cell(0, 6, text, align="L")
         pdf.ln(2)
 
     # Summary
@@ -65,7 +74,7 @@ def build_pdf(
     pdf.set_font("Helvetica", "", 11)
     for k in ["mean", "median", "max", "min", "count"]:
         v = summary.get(k, "")
-        pdf.multi_cell(0, 6, f"{k}: {v}", align="L")
+        pdf.multi_cell(0, 6, _safe_text(f"{k}: {v}"), align="L")
     pdf.ln(2)
 
     # Chart
@@ -96,9 +105,8 @@ def build_pdf(
         "Open science by Cody Ryan Jenkins (CC BY 4.0). "
         "Learn more: Reparodynamics – RYE (Repair Yield per Energy)."
     )
-    pdf.multi_cell(0, 6, footer, align="L")
+    pdf.multi_cell(0, 6, _safe_text(footer), align="L")
 
-    # ✅ Return as bytes
     out = io.BytesIO()
     pdf.output(out)
     data = out.getvalue()
