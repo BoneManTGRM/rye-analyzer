@@ -41,8 +41,9 @@ st.caption("Compute Repair Yield per Energy from any time series.")
 
 with st.expander("What is RYE"):
     st.write(
-        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful repair or performance gains. "
-        "Higher RYE means better efficiency. Upload a CSV to compute RYE and explore rolling windows, comparisons, and reports."
+        "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful "
+        "repair or performance gains. Higher RYE means better efficiency. Upload a CSV to compute RYE and explore "
+        "rolling windows, comparisons, and reports."
     )
 
 # ---------------- Sidebar ----------------
@@ -67,7 +68,7 @@ with st.sidebar:
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
-    st.write("No CSV yet")
+    st.write("No CSV yet?")
     if st.button("Download example CSV"):
         example = pd.DataFrame({
             "time": np.arange(0, 15),
@@ -127,7 +128,7 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
     lines.append(f"Average efficiency (RYE mean) is {mean_v:.3f}. "
                  f"Values typically range between {min_v:.3f} and {max_v:.3f} across the dataset.")
     if mean_v > 1.0:
-        lines.append("On average, each unit of energy returned more than one unit of repair — an excellent efficiency level.")
+        lines.append("On average, each unit of energy returned more than one unit of repair—an excellent efficiency level.")
     elif mean_v > 0.5:
         lines.append("Efficiency is solid; small process changes that reduce energy or boost repair should lift the mean further.")
     else:
@@ -238,7 +239,7 @@ with tab4:
 
             st.write("Build a portable report to share with teams.")
 
-            meta = {
+            metadata = {
                 "rows": len(df1),
                 "repair_col": col_repair,
                 "energy_col": col_energy,
@@ -254,21 +255,23 @@ with tab4:
                     if build_pdf is None:
                         st.error("PDF generator not available. Make sure report.py is present and fpdf is in requirements.txt")
                     else:
-                        pdf_bytes = build_pdf(
-                            list(rye),
-                            summary,
-                            metadata=meta,
-                            title="RYE Report",
-                            plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
-                            interpretation=interp,
-                        )
-                        st.download_button(
-                            "Download RYE report PDF",
-                            data=pdf_bytes,
-                            file_name="rye_report.pdf",
-                            mime="application/pdf",
-                            use_container_width=True,
-                        )
+                        try:
+                            pdf_bytes = build_pdf(
+                                rye=list(rye),
+                                summary=summary,
+                                metadata=metadata,
+                                plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
+                                interpretation=interp,
+                            )
+                            st.download_button(
+                                "Download RYE report PDF",
+                                data=pdf_bytes,
+                                file_name="rye_report.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                            )
+                        except Exception as e:
+                            st.error(f"PDF generation failed: {e}")
             with coly:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
                 st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
