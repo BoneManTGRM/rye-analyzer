@@ -21,7 +21,7 @@ def build_pdf(rye_series, summary: dict, title="RYE Report"):
         v = summary.get(k, "")
         pdf.cell(0, 7, f"{k}: {v}", ln=True)
 
-    # Sample RYE values
+    # Sample values
     pdf.ln(4)
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "RYE sample values", ln=True)
@@ -34,6 +34,12 @@ def build_pdf(rye_series, summary: dict, title="RYE Report"):
     pdf.set_font("Arial", "I", 10)
     pdf.multi_cell(0, 6, "Open science by Cody Ryan Jenkins. CC BY 4.0")
 
-    # Return as raw bytes (Streamlit-compatible)
-    pdf_bytes = pdf.output(dest="S").encode("latin-1") if isinstance(pdf.output(dest="S"), str) else pdf.output(dest="S")
+    # Output handling: ensure byte-safe for both fpdf and fpdf2
+    try:
+        pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    except AttributeError:
+        pdf_bytes = pdf.output(dest="S").encode("utf-8")
+    except TypeError:
+        pdf_bytes = pdf.output(dest="S")
+
     return pdf_bytes
