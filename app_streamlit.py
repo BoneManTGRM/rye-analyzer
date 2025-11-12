@@ -1,5 +1,5 @@
 # app_streamlit.py
-# RYE Analyzer — full upgraded build with PDF interpretation
+# RYE Analyzer full app with CSV TSV XLSX support and PDF reporting
 
 from __future__ import annotations
 import io, json
@@ -9,7 +9,16 @@ import plotly.express as px
 import streamlit as st
 
 # Local helpers
-from core import compute_rye_from_df, rolling_series, safe_float, summarize_series
+from core import (
+    load_table,              # new: reads csv tsv xls xlsx
+    normalize_columns,       # new: snake cases headers
+    PRESETS,                 # new: AI and Biology labels
+    compute_rye_from_df,
+    rolling_series,
+    safe_float,
+    summarize_series,
+)
+
 try:
     from report import build_pdf  # returns bytes
 except Exception:
@@ -30,21 +39,26 @@ st.caption("Compute Repair Yield per Energy from any time series.")
 with st.expander("What is RYE"):
     st.write(
         "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful "
-        "repair or performance gains. Higher RYE means better efficiency. Upload a CSV to compute RYE and explore "
+        "repair or performance gains. Higher RYE means better efficiency. Upload a dataset to compute RYE and explore "
         "rolling windows, comparisons, and reports."
     )
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
     st.header("Inputs")
-    st.write("Upload one CSV to analyze. Optionally upload a second CSV to compare.")
-    file1 = st.file_uploader("Primary CSV", type=["csv"], key="csv1")
-    file2 = st.file_uploader("Comparison CSV (optional)", type=["csv"], key="csv2")
+
+    # Preset labels for copy only, internal column names can stay the same
+    preset_name = st.selectbox("Preset", ["AI", "Biology"], index=1)
+    preset = PRESETS[preset_name]
+
+    st.write("Upload one file to analyze. Optionally upload a second file to compare.")
+    file1 = st.file_uploader("Primary file", type=["csv", "tsv", "xls", "xlsx"], key="csv1")
+    file2 = st.file_uploader("Comparison file (optional)", type=["csv", "tsv", "xls", "xlsx"], key="csv2")
 
     st.divider()
-    st.write("Column names in your CSV")
-    col_repair = st.text_input("Repair column", value="performance")
-    col_energy = st.text_input("Energy column", value="energy")
+    st.write("Column names in your data")
+    col_repair = st.text_input(f"{preset['repair_label']} column", value="performance")
+    col_energy = st.text_input(f"{preset['energy_label']} column", value="energy")
     col_time   = st.text_input("Time column (optional)", value="time")
     col_domain = st.text_input("Domain column (optional)", value="domain")
 
@@ -56,7 +70,7 @@ with st.sidebar:
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
-    st.write("No CSV yet")
+    st.write("No data yet")
     if st.button("Download example CSV"):
         example = pd.DataFrame({
             "time": np.arange(0, 15),
@@ -68,15 +82,17 @@ with st.sidebar:
         st.download_button("Save example.csv", b, file_name="example.csv", mime="text/csv")
 
 # ---------------- Core workers ----------------
-def load_csv(file) -> pd.DataFrame | None:
+def load_any(file) -> pd.DataFrame | None:
     if file is None:
         return None
     try:
-        df = pd.read_csv(file)
-        df.columns = [c.strip() for c in df.columns]
+        df = load_table(file)          # supports csv tsv xls xlsx
+        df = normalize_columns(df)     # snake case headers
         return df
     except Exception as e:
-        st.error(f"Could not read CSV. {e}")
+        import traceback
+        st.error(f"Could not read file. {e}")
+        st.text(traceback.format_exc())
         return None
 
 def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
@@ -116,33 +132,33 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
     lines.append(f"Average efficiency (RYE mean) is {mean_v:.3f}. "
                  f"Values typically range between {min_v:.3f} and {max_v:.3f} across the dataset.")
     if mean_v > 1.0:
-        lines.append("On average, each unit of energy returned more than one unit of repair—an excellent efficiency level.")
+        lines.append("On average, each unit of energy returned more than one unit of repair which is an excellent efficiency level.")
     elif mean_v > 0.5:
-        lines.append("Efficiency is solid; small process changes that reduce energy or boost repair should lift the mean further.")
+        lines.append("Efficiency is solid. Small process changes that reduce energy or boost repair should lift the mean further.")
     else:
-        lines.append("Efficiency is modest; look for high-energy, low-return segments to prune or repair.")
+        lines.append("Efficiency is modest. Look for high energy and low return segments to prune or repair.")
 
-    lines.append(f"The report used a rolling window of {window} to smooth short-term noise.")
+    lines.append(f"The report used a rolling window of {window} to smooth short term noise.")
     if sim_mult != 1.0:
         if sim_mult < 1.0:
-            lines.append(f"An energy down-scaling factor of {sim_mult:.2f} was simulated; RYE should increase under this scenario.")
+            lines.append(f"An energy down scaling factor of {sim_mult:.2f} was simulated. RYE should increase under this scenario.")
         else:
-            lines.append(f"An energy up-scaling factor of {sim_mult:.2f} was simulated; RYE may fall unless repair improved proportionally.")
+            lines.append(f"An energy up scaling factor of {sim_mult:.2f} was simulated. RYE may fall unless repair improved proportionally.")
 
-    lines.append("Next steps: identify spikes/dips in the RYE curve, map them to events or interventions, "
-                 "and iterate TGRM loops (detect -> minimal fix -> verify) to raise average RYE.")
+    lines.append("Next steps: identify spikes or dips in the RYE curve, map them to events or interventions, "
+                 "and iterate TGRM loops to raise average RYE.")
     return " ".join(lines)
 
 # ---------------- Main UI ----------------
 tab1, tab2, tab3, tab4 = st.tabs(["Single analysis", "Compare datasets", "Multi domain", "Reports"])
 
-df1 = load_csv(file1)
-df2 = load_csv(file2)
+df1 = load_any(file1)
+df2 = load_any(file2)
 
 # ---------- Tab 1 ----------
 with tab1:
     if df1 is None:
-        st.info("Upload a CSV in the sidebar to begin.")
+        st.info("Upload a file in the sidebar to begin.")
     else:
         if ensure_columns(df1, col_repair, col_energy):
             block = compute_block(df1, "primary", sim_factor)
@@ -154,11 +170,17 @@ with tab1:
             st.write("Columns:")
             st.json(list(df1.columns))
 
-            fig = px.line(rye, title="RYE")
-            st.plotly_chart(fig, use_container_width=True)
-
-            fig2 = px.line(rye_roll, title=f"RYE rolling window {window}")
-            st.plotly_chart(fig2, use_container_width=True)
+            if col_time in df1.columns:
+                idx = df1[col_time]
+                fig = px.line(x=idx, y=rye, labels={"x": col_time, "y": "RYE"}, title="RYE")
+                st.plotly_chart(fig, use_container_width=True)
+                fig2 = px.line(x=idx, y=rye_roll, labels={"x": col_time, "y": f"RYE rolling {window}"}, title=f"RYE rolling window {window}")
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                fig = px.line(rye, title="RYE")
+                st.plotly_chart(fig, use_container_width=True)
+                fig2 = px.line(rye_roll, title=f"RYE rolling window {window}")
+                st.plotly_chart(fig2, use_container_width=True)
 
             section("Summary")
             st.code(json.dumps(summary, indent=2))
@@ -172,7 +194,7 @@ with tab1:
 # ---------- Tab 2 ----------
 with tab2:
     if df1 is None or df2 is None:
-        st.info("Upload two CSV files to compare.")
+        st.info("Upload two files to compare.")
     else:
         if ensure_columns(df1, col_repair, col_energy) and ensure_columns(df2, col_repair, col_energy):
             b1 = compute_block(df1, "A", sim_factor)
@@ -188,18 +210,29 @@ with tab2:
             colB.metric("Mean RYE B", f"{s2:.4f}")
             colC.metric("Delta", f"{delta:.4f}", f"{pct:.2f}%")
 
-            fig = px.line(b1["rye"], title="RYE comparison")
-            fig.add_scatter(y=b2["rye"], mode="lines", name="B")
-            st.plotly_chart(fig, use_container_width=True)
+            if col_time in df1.columns and col_time in df2.columns:
+                x1 = df1[col_time]
+                x2 = df2[col_time]
+                fig = px.line(x=x1, y=b1["rye"], labels={"x": col_time, "y": "RYE"}, title="RYE comparison")
+                fig.add_scatter(x=x2, y=b2["rye"], mode="lines", name="B")
+                st.plotly_chart(fig, use_container_width=True)
 
-            fig2 = px.line(b1["rye_roll"], title=f"RYE rolling {window} comparison")
-            fig2.add_scatter(y=b2["rye_roll"], mode="lines", name="B")
-            st.plotly_chart(fig2, use_container_width=True)
+                fig2 = px.line(x=x1, y=b1["rye_roll"], labels={"x": col_time, "y": f"RYE rolling {window}"}, title=f"RYE rolling {window} comparison")
+                fig2.add_scatter(x=x2, y=b2["rye_roll"], mode="lines", name="B")
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                fig = px.line(b1["rye"], title="RYE comparison")
+                fig.add_scatter(y=b2["rye"], mode="lines", name="B")
+                st.plotly_chart(fig, use_container_width=True)
+
+                fig2 = px.line(b1["rye_roll"], title=f"RYE rolling {window} comparison")
+                fig2.add_scatter(y=b2["rye_roll"], mode="lines", name="B")
+                st.plotly_chart(fig2, use_container_width=True)
 
 # ---------- Tab 3 ----------
 with tab3:
     if df1 is None:
-        st.info("Upload a CSV to see domain splits.")
+        st.info("Upload a file to see domain splits.")
     else:
         if col_domain not in df1.columns:
             st.info(f"No domain column named '{col_domain}' found.")
@@ -217,7 +250,7 @@ with tab3:
 # ---------- Tab 4 ----------
 with tab4:
     if df1 is None:
-        st.info("Upload a CSV to generate a report.")
+        st.info("Upload a file to generate a report.")
     else:
         if ensure_columns(df1, col_repair, col_energy):
             block = compute_block(df1, "primary", sim_factor)
@@ -229,6 +262,7 @@ with tab4:
 
             metadata = {
                 "rows": len(df1),
+                "preset": preset_name,
                 "repair_col": col_repair,
                 "energy_col": col_energy,
                 "time_col": col_time if col_time in df1.columns else "",
@@ -247,7 +281,7 @@ with tab4:
                             list(rye),
                             summary,
                             metadata=metadata,
-                            plot_series={"RYE": list(rye), "RYE (rolling)": list(rye_roll)},
+                            plot_series={"RYE": list(rye), "RYE rolling": list(rye_roll)},
                             interpretation=interp,
                         )
                         st.download_button(
