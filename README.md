@@ -36,10 +36,7 @@ If you don’t have data yet, click **“Download example CSV”** to start test
 
 ---
 
-## ⚙️ Installation (Local)
-
-```bash
-git clone https://github.com/BoneMan/rye-analyzer
+#git clone https://github.com/BoneManTGRM/rye-analyzer.git
 cd rye-analyzer
 pip install -r requirements.txt
 streamlit run app_streamlit.py
