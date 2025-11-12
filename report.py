@@ -1,6 +1,6 @@
 # report.py
 # Robust PDF builder for RYE Analyzer using fpdf2.
-# Keeps all sections: title → summary → interpretation → metadata → series previews.
+# Keeps all sections: title -> summary -> interpretation -> metadata -> series previews.
 # Tries to render compact line plots; falls back to text previews if plotting fails.
 
 from __future__ import annotations
@@ -60,8 +60,10 @@ def _fmt_num(v: Any) -> str:
 
 
 def _wrap(pdf: FPDF, text: str, w: float, line_h: float = 5.0) -> None:
+    """Wrapper around multi_cell that always starts at the left margin."""
     if not text:
         return
+    pdf.set_x(pdf.l_margin)
     pdf.multi_cell(w, line_h, txt=_latin1(text))
 
 
@@ -168,8 +170,9 @@ def build_pdf(
     pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
 
-    # Compute printable width dynamically from margins with a tiny safety buffer
-    W = pdf.w - pdf.l_margin - pdf.r_margin - 2
+    # Compute printable width dynamically from margins with a safety buffer
+    SAFE_MARGIN = 8.0  # extra buffer so even strict viewers do not clip
+    W = pdf.w - pdf.l_margin - pdf.r_margin - SAFE_MARGIN
 
     # Header
     pdf.set_x(pdf.l_margin)
@@ -180,7 +183,7 @@ def build_pdf(
     pdf.cell(W, 6, _latin1("Repair Yield per Energy - portable summary"), ln=1)
     _med_gap(pdf)
 
-    # Summary stats (grid-like listing) — use 2 columns for more room
+    # Summary stats (grid-like listing) use 2 columns for more room
     _section_title(pdf, "Summary stats", W)
     pdf.set_font("Helvetica", "", 11)
     keys = ["mean", "median", "min", "max", "std", "resilience", "count", "p10", "p50", "p90", "iqr"]
@@ -197,7 +200,7 @@ def build_pdf(
         pdf.ln(6)
     _med_gap(pdf)
 
-    # Interpretation (prominent)
+    # Interpretation
     _section_title(pdf, "Interpretation", W)
     pdf.set_font("Helvetica", "", 11)
     if interpretation:
@@ -206,7 +209,7 @@ def build_pdf(
         _wrap(pdf, "No interpretation supplied by the app.", W)
     _med_gap(pdf)
 
-    # Metadata (priority keys first, then the rest)
+    # Metadata
     if metadata:
         _section_title(pdf, "Metadata", W)
         priority = [
@@ -235,7 +238,7 @@ def build_pdf(
             _kv(pdf, f"{k}:", _fmt_num(v), W)
         _med_gap(pdf)
 
-    # Series previews — attempt small plot, else text tables
+    # Series previews
     if plot_series:
         _ensure_space(pdf, needed_mm=20)
         _section_title(pdf, "Series previews", W)
@@ -259,7 +262,7 @@ def build_pdf(
                     _wrap(pdf, line, W)
                 _small_gap(pdf)
 
-    # Base RYE sequence as last section
+    # Base RYE sequence
     if rye_series:
         _ensure_space(pdf, needed_mm=25)
         _section_title(pdf, "RYE sequence", W)
