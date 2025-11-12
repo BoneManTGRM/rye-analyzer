@@ -1,404 +1,225 @@
 # report.py
-# RYE Report generator — Unicode-safe, link-safe, and section-rich.
-# Drop-in replacement compatible with your app_streamlit.py.
+# Robust PDF builder for RYE Analyzer using fpdf2.
+# Keeps all sections: title → summary → interpretation → metadata → series previews.
+# Tries to render compact line plots; falls back to text previews if plotting fails.
 
 from __future__ import annotations
-import os, io, tempfile
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Any
+from fpdf import FPDF
+import io
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
+# Optional plotting (safe fallback if matplotlib isn't present)
 try:
-    # Prefer fpdf2 (modern) but allow classic "fpdf" import path
-    from fpdf import FPDF
-except Exception as e:
-    raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
+    import matplotlib.pyplot as plt  # no external styles/colors
+    _HAS_MPL = True
+except Exception:
+    _HAS_MPL = False
 
 
-# =============================
-# Font resolution (NotoSans preferred, DejaVuSans fallback)
-# =============================
-FONT_DIR = "fonts"
-NOTO_PATH = os.path.join(FONT_DIR, "NotoSans-Regular.ttf")
-DEJAVU_PATH = os.path.join(FONT_DIR, "DejaVuSans.ttf")
-
-UNICODE_FONT_NAME: Optional[str] = None
-UNICODE_FONT_PATH: Optional[str] = None
-
-def _resolve_font() -> None:
-    """Pick a local Unicode-capable TTF if available."""
-    global UNICODE_FONT_NAME, UNICODE_FONT_PATH
-    if os.path.exists(NOTO_PATH):
-        UNICODE_FONT_NAME, UNICODE_FONT_PATH = "NotoSans", NOTO_PATH
-    elif os.path.exists(DEJAVU_PATH):
-        UNICODE_FONT_NAME, UNICODE_FONT_PATH = "DejaVu", DEJAVU_PATH
-    else:
-        UNICODE_FONT_NAME = UNICODE_FONT_PATH = None  # will fall back to core fonts
-
-
-# =============================
-# Text sanitizers & helpers
-# =============================
-_ZW = ("\u200b", "\u200e", "\u200f", "\xad")  # zero-width & soft hyphen
-
-def _strip_zero_width(s: str) -> str:
-    for z in _ZW:
-        s = s.replace(z, "")
-    return s
-
-def _fmt_num(v: Union[str, int, float]) -> str:
-    if isinstance(v, float):
-        return f"{v:.3f}"
-    return str(v)
-
-def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
-    """Return safe text for current font; remove zero-width characters."""
-    s = _strip_zero_width(_fmt_num(txt))
-    if unicode_ok:
-        return s
-    # Core fonts only support latin-1; protect to avoid crashes.
-    return s.encode("latin-1", "replace").decode("latin-1")
-
-def _normalize_doi_or_url(val: str) -> Optional[str]:
-    if not val:
-        return None
-    s = str(val).strip()
-    if s.startswith("10."):
-        return f"https://doi.org/{s}"
-    if s.startswith("http://") or s.startswith("https://"):
-        return s
-    if "zenodo.org" in s and not s.startswith("http"):
-        return f"https://{s}"
-    return s
-
-
-# =============================
-# PDF shell
-# =============================
-class Report(FPDF):
-    """A4 portrait, clean margins, page numbers."""
-    def __init__(self):
-        super().__init__(orientation="P", unit="mm", format="A4")
-        self.set_margins(12, 12, 12)
-        self.set_auto_page_break(auto=True, margin=15)
-        self.set_text_color(0, 0, 0)
-        self.unicode_ok = False
-
-        _resolve_font()
-        try:
-            if UNICODE_FONT_PATH and os.path.exists(UNICODE_FONT_PATH):
-                # Register the regular face for the family
-                self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
-                # Note: if you later add a bold TTF, call:
-                # self.add_font(UNICODE_FONT_NAME, "B", PATH_TO_BOLD_TTF, uni=True)
-                self.unicode_ok = True
-            self.alias_nb_pages()
-        except Exception:
-            self.unicode_ok = False
-
-    @property
-    def content_w(self) -> float:
-        return self.w - self.l_margin - self.r_margin
-
-    def footer(self):
-        self.set_y(-12)
-        self.set_text_color(0, 0, 0)
-        if self.unicode_ok:
-            try:
-                self.set_font(UNICODE_FONT_NAME, "", 9)
-            except Exception:
-                self.set_font("Helvetica", "I", 9)
-        else:
-            self.set_font("Helvetica", "I", 9)
-        self.cell(0, 6, _sanitize(f"Page {self.page_no()}/{{nb}}", self.unicode_ok), align="R")
-
-
-def _font(pdf: Report, style: str = "", size: int = 11) -> None:
-    pdf.set_text_color(0, 0, 0)
-    if pdf.unicode_ok:
-        # We only registered the regular face; emulate bold via style if available
-        try:
-            pdf.set_font(UNICODE_FONT_NAME, style, size)
-        except Exception:
-            pdf.set_font(UNICODE_FONT_NAME, "", size)
-    else:
-        pdf.set_font("Helvetica", style, size)
-
-def _h1(pdf: Report, text: str) -> None:
-    _font(pdf, "B", 18)
-    pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
-
-def _h2(pdf: Report, text: str) -> None:
-    _font(pdf, "B", 13)
-    pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
-
-def _body(pdf: Report, size: int = 11) -> None:
-    _font(pdf, "", size)
-
-def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0) -> None:
+# --------------------- Small helpers ---------------------
+def _latin1(s: str) -> str:
+    """fpdf core fonts are latin-1; replace unsupported chars gracefully."""
     try:
-        if os.path.exists(path):
-            x = pdf.w - pdf.r_margin - w
-            y = pdf.t_margin
-            pdf.image(path, x=x, y=y, w=w)
+        return s.encode("latin-1", "replace").decode("latin-1")
     except Exception:
-        pass
+        return s
 
-def _hyperlink(pdf: Report, label: str, url: Optional[str]) -> None:
-    """Clickable link line; robust even if unicode font is unavailable."""
-    url = (url or "").strip()
-    text = f"{label}: {url}" if url else label
-    if not url:
-        pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L")
+def _fmt_num(v: Any) -> str:
+    try:
+        if isinstance(v, int):
+            return str(v)
+        if isinstance(v, float):
+            if abs(v) >= 1e4 or (0 < abs(v) < 1e-3):
+                return f"{v:.6f}"
+            return f"{v:.4f}"
+        return str(v)
+    except Exception:
+        return str(v)
+
+def _wrap(pdf: FPDF, text: str, w: float, line_h: float = 5.0) -> None:
+    if not text:
         return
-    pdf.set_text_color(0, 0, 200)
-    # underline if possible
-    if pdf.unicode_ok:
-        try:
-            pdf.set_font(UNICODE_FONT_NAME, "U", 11)
-        except Exception:
-            pdf.set_font(UNICODE_FONT_NAME, "", 11)
-    else:
-        pdf.set_font("Helvetica", "U", 11)
-    pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L", link=url)
-    pdf.set_text_color(0, 0, 0)
-    _body(pdf, 11)
+    pdf.multi_cell(w, line_h, txt=_latin1(text))
 
-def _key_val_rows(rows: List[Tuple[str, Union[str, float, int]]], key_w: float, val_w: float):
-    """Wrapped key/value rows that respect the page width."""
-    def render(pdf: Report) -> None:
-        for k, v in rows:
-            _font(pdf, "B", 11)
-            pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
-            _body(pdf, 11)
-            pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
-    return render
+def _kv(pdf: FPDF, title: str, value: str, w: float) -> None:
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(w * 0.35, 6, _latin1(title))
+    pdf.set_font("Helvetica", "", 11)
+    pdf.multi_cell(w * 0.65, 6, _latin1(value))
 
+def _section_title(pdf: FPDF, title: str, w: float) -> None:
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(w, 7, _latin1(title))
+    pdf.ln(8)
 
-# =============================
-# Small plots into the PDF
-# =============================
-def _add_series_plot(pdf: Report,
-                     series_dict: Dict[str, Sequence[float]],
-                     title: str = "Repair Yield per Energy") -> None:
-    fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
-    for label, series in series_dict.items():
-        ax.plot(range(len(series)), list(series), label=str(label), linewidth=1.8)
-    ax.set_title(title)
-    ax.set_xlabel("Index")
-    ax.set_ylabel("RYE")
-    ax.legend(loc="best", frameon=False)
-    ax.grid(True, linewidth=0.3, alpha=0.6)
-    fig.tight_layout(pad=0.7)
+def _small_gap(pdf: FPDF): pdf.ln(2)
+def _med_gap(pdf: FPDF): pdf.ln(4)
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+def _as_rows(name: str, seq: Iterable[float], max_rows: int = 120) -> List[str]:
+    vals = list(seq)
+    n = len(vals)
+    if n == 0:
+        return [f"{name}: (empty)"]
+    rows = [f"{name} (first {min(n, max_rows)} of {n})"]
+    chunk = 10
+    for i in range(0, min(n, max_rows), chunk):
+        part = ", ".join(_fmt_num(vals[j]) for j in range(i, min(i + chunk, min(n, max_rows))))
+        rows.append(part)
+    if n > max_rows:
+        rows.append("... (truncated)")
+    return rows
+
+def _image_from_series(series_dict: Dict[str, List[float]], width_px: int = 1000, height_px: int = 400) -> Optional[bytes]:
+    """Return PNG bytes of a simple line plot, or None if plotting fails or matplotlib absent."""
+    if not _HAS_MPL:
+        return None
     try:
-        fig.savefig(tmp.name, format="png", bbox_inches="tight", dpi=180)
-    finally:
+        fig = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
+        ax = fig.add_subplot(111)
+        for name, ys in series_dict.items():
+            if ys and any(isinstance(t, (int, float)) for t in ys):
+                ax.plot(range(len(ys)), ys, label=name)  # no explicit colors or styles
+        ax.set_xlabel("Index")
+        ax.set_ylabel("Value")
+        ax.set_title("Series preview")
+        if len(series_dict) > 1:
+            ax.legend(loc="best", fontsize=8)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
-
-    try:
-        pdf.image(tmp.name, w=pdf.content_w)
-    finally:
+        return buf.getvalue()
+    except Exception:
         try:
-            os.unlink(tmp.name)
+            plt.close("all")
         except Exception:
             pass
+        return None
 
 
-# =============================
-# Main builder
-# =============================
+# --------------------- Main builder ---------------------
 def build_pdf(
-    rye: Iterable[float],
-    summary: Dict[str, Union[float, int, str]],
-    metadata: Dict[str, Union[str, int, float, list, dict]],
-    plot_series: Optional[Union[Dict[str, Sequence[float]], List[Dict[str, Sequence[float]]]]] = None,
-    interpretation: Optional[str] = None,
-    logo_path: Optional[str] = None,
+    rye_series: List[float],
+    summary: Dict,
+    *,
+    metadata: Optional[Dict] = None,
+    plot_series: Optional[Dict[str, List[float]]] = None,
+    interpretation: str = ""
 ) -> bytes:
     """
-    Build a multi-section PDF and return raw bytes.
+    Returns PDF bytes.
 
-    metadata accepted keys (all optional):
-      - 'generated' | 'timestamp' : shown under title if present
-      - 'dataset_link'            : DOI or URL (clickable)
-      - 'rolling_window'          : int
-      - 'rows'                    : int
-      - 'preset', 'repair_col', 'energy_col', 'time_col', 'domain_col'
-      - 'columns'                 : list of column names
-      - 'sample_n'                : how many RYE values to print (default 100)
-      - 'notes'                   : freeform text
-      - advanced (if available): 'regimes' (list of dicts), 'correlation' (dict),
-                                 'noise_floor' (dict), 'bands' (dict with 'low','mid','high' Series)
+    Parameters
+    ----------
+    rye_series : List[float]
+        Base RYE sequence.
+    summary : Dict
+        Output of summarize_series.
+    metadata : Optional[Dict]
+        Arbitrary metadata. Known keys (if present) are shown first:
+        rows, preset, repair_col, energy_col, time_col, domain_col, rolling_window, dataset_link,
+        regimes, correlation, noise_floor, bands, columns, etc.
+    plot_series : Optional[Dict[str, List[float]]]
+        Named series to render (e.g., {"RYE": [...], "RYE rolling k": [...]}).
+    interpretation : str
+        Human-readable interpretation to display prominently.
     """
-    pdf = Report()
+    metadata = metadata or {}
+    plot_series = plot_series or {}
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
-    if logo_path:
-        _add_logo(pdf, logo_path, w=22)
+    W = 190  # printable width
 
-    # Title & when
-    _h1(pdf, "RYE Report")
-    when = str(metadata.get("generated") or metadata.get("timestamp") or "").strip()
-    if when:
-        _body(pdf, 10)
-        pdf.cell(0, 6, _sanitize(f"Generated: {when}", pdf.unicode_ok), ln=1)
-    pdf.ln(2)
+    # Header
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(W, 10, _latin1("RYE Analyzer Report"), ln=1)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(W, 6, _latin1("Repair Yield per Energy - portable summary"), ln=1)
+    _med_gap(pdf)
 
-    # Dataset metadata
-    _h2(pdf, "Dataset metadata")
-    key_w = 42
-    val_w = pdf.content_w - key_w
-    # Link first (if any)
-    raw_link = str(metadata.get("dataset_link", "") or "").strip()
-    if raw_link:
-        url = _normalize_doi_or_url(raw_link)
-        _hyperlink(pdf, "Dataset link", url)
+    # Summary stats (grid-like listing)
+    _section_title(pdf, "Summary stats", W)
+    pdf.set_font("Helvetica", "", 11)
+    keys = ["mean", "median", "min", "max", "std", "resilience", "count", "p10", "p50", "p90", "iqr"]
+    colw = W / 3
+    for i, k in enumerate(keys):
+        v = _fmt_num(summary.get(k, ""))
+        pdf.cell(colw, 6, _latin1(f"{k}: {v}"))
+        if (i + 1) % 3 == 0:
+            pdf.ln(6)
+    if len(keys) % 3 != 0:
+        pdf.ln(6)
+    _med_gap(pdf)
 
-    skip_keys = {"generated", "timestamp", "dataset_link", "columns", "notes",
-                 "sample_n", "regimes", "correlation", "noise_floor", "bands"}
-    rows = []
-    for k, v in metadata.items():
-        if k in skip_keys:
-            continue
-        rows.append((str(k), _fmt_num(v)))
-    if rows:
-        _key_val_rows(rows, key_w=key_w, val_w=val_w)(pdf)
-    pdf.ln(2)
-
-    # Summary statistics (whatever you passed in, e.g., mean/median/resilience)
-    _h2(pdf, "Summary statistics")
-    sum_rows = [(str(k), _fmt_num(v)) for k, v in summary.items()]
-    _key_val_rows(sum_rows, key_w=key_w, val_w=val_w)(pdf)
-    pdf.ln(2)
-
-    # Plots
-    if plot_series:
-        if isinstance(plot_series, dict):
-            _add_series_plot(pdf, plot_series)
-        elif isinstance(plot_series, list):
-            for ps in plot_series:
-                if isinstance(ps, dict):
-                    _add_series_plot(pdf, ps)
-        pdf.ln(2)
-
-    # Sample values (two columns)
-    n_show = int(metadata.get("sample_n", 100) or 100)
-    _h2(pdf, f"RYE sample values (first {n_show})")
-    first_n = list(rye)[:n_show]
-    left  = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 0]
-    right = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 1]
-    col_w = (pdf.content_w - 5) / 2
-    _body(pdf, 11)
-    max_lines = max(len(left), len(right))
-    for idx in range(max_lines):
-        ltxt = left[idx] if idx < len(left) else ""
-        rtxt = right[idx] if idx < len(right) else ""
-        y0 = pdf.get_y(); x0 = pdf.get_x()
-        pdf.multi_cell(col_w, 6, _sanitize(ltxt, pdf.unicode_ok), align="L")
-        h_left = pdf.get_y() - y0
-        pdf.set_xy(x0 + col_w + 5, y0)
-        pdf.multi_cell(col_w, 6, _sanitize(rtxt, pdf.unicode_ok), align="L")
-        h_right = pdf.get_y() - y0
-        pdf.set_y(y0 + max(h_left, h_right))
-    pdf.ln(2)
-
-    # Optional: columns in dataset
-    cols = metadata.get("columns")
-    if isinstance(cols, (list, tuple)) and cols:
-        _h2(pdf, "Columns in dataset")
-        _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(", ".join(map(str, cols)), pdf.unicode_ok), align="L")
-        pdf.ln(2)
-
-    # Interpretation (auto text if not provided)
+    # Interpretation (prominent)
+    _section_title(pdf, "Interpretation", W)
+    pdf.set_font("Helvetica", "", 11)
     if interpretation:
-        interp_text = str(interpretation)
+        _wrap(pdf, interpretation, W)
     else:
-        mean = float(summary.get("mean", 0.0) or 0.0)
-        minv = float(summary.get("min", 0.0) or 0.0)
-        maxv = float(summary.get("max", 0.0) or 0.0)
-        resil = summary.get("resilience", None)
-        level = "high" if mean > 0.6 else ("moderate" if mean > 0.3 else "modest")
-        extra = f" Resilience index {resil:.3f} indicates stability." if isinstance(resil, (int, float)) else ""
-        interp_text = (
-            f"Average efficiency (RYE mean) is {mean:.3f}, spanning [{minv:.3f}, {maxv:.3f}]. "
-            f"Overall efficiency is {level}.{extra} "
-            "Use a rolling window to smooth short-term noise, map spikes/dips to interventions, "
-            "and iterate TGRM loops (detect → minimal fix → verify) to lift mean RYE and compress variance."
-        )
-    _h2(pdf, "Interpretation")
-    _body(pdf, 11)
-    pdf.multi_cell(0, 6, _sanitize(interp_text, pdf.unicode_ok), align="L")
-    pdf.ln(2)
+        _wrap(pdf, "No interpretation supplied by the app.", W)
+    _med_gap(pdf)
 
-    # Advanced analytics (render only if present)
-    regimes = metadata.get("regimes")
-    if isinstance(regimes, list) and regimes:
-        _h2(pdf, "Regimes (sustained zones)")
-        _body(pdf, 11)
-        for r in regimes[:200]:
-            line = f"[{int(r.get('start', 0))} – {int(r.get('end', 0))}]  {str(r.get('label',''))}"
-            pdf.multi_cell(0, 6, _sanitize(line, pdf.unicode_ok), align="L")
-        pdf.ln(2)
+    # Metadata (priority keys first, then the rest)
+    if metadata:
+        _section_title(pdf, "Metadata", W)
+        priority = [
+            "rows", "preset", "repair_col", "energy_col", "time_col",
+            "domain_col", "rolling_window", "dataset_link"
+        ]
+        shown = set()
+        for k in priority:
+            if k in metadata:
+                _kv(pdf, f"{k}:", _fmt_num(metadata[k]), W)
+                shown.add(k)
+        # Extra structured analytics if present
+        for k in ("regimes", "correlation", "noise_floor", "bands"):
+            if k in metadata and k not in shown:
+                _kv(pdf, f"{k}:", _fmt_num(metadata[k]), W)
+                shown.add(k)
+        # Columns list
+        if "columns" in metadata and "columns" not in shown:
+            cols_str = ", ".join(map(str, metadata["columns"]))
+            _kv(pdf, "columns:", cols_str, W)
+            shown.add("columns")
+        # The rest
+        for k, v in metadata.items():
+            if k in shown:
+                continue
+            _kv(pdf, f"{k}:", _fmt_num(v), W)
+        _med_gap(pdf)
 
-    corr = metadata.get("correlation")
-    if isinstance(corr, dict) and corr:
-        _h2(pdf, "Energy ↔ ΔPerformance correlation")
-        crows = []
-        if "pearson" in corr: crows.append(("Pearson", _fmt_num(corr["pearson"])))
-        if "spearman" in corr: crows.append(("Spearman", _fmt_num(corr["spearman"])))
-        if crows:
-            _key_val_rows(crows, key_w=key_w, val_w=val_w)(pdf)
-            pdf.ln(2)
-
-    noise = metadata.get("noise_floor")
-    if isinstance(noise, dict) and noise:
-        _h2(pdf, "Noise floor estimate")
-        nrows = []
-        for k, v in noise.items():
-            nrows.append((str(k), _fmt_num(v)))
-        _key_val_rows(nrows, key_w=key_w, val_w=val_w)(pdf)
-        pdf.ln(2)
-
-    bands = metadata.get("bands")
-    if isinstance(bands, dict) and set(bands.keys()) & {"low","mid","high"}:
-        _h2(pdf, "Bootstrap bands (rolling mean)")
-        # Summarize as quantiles to save space
-        def _qstat(series) -> List[Tuple[str, str]]:
+    # Series previews — attempt small plot, else text tables
+    if plot_series:
+        _section_title(pdf, "Series previews", W)
+        img_bytes = _image_from_series(plot_series)
+        if img_bytes:
             try:
-                import numpy as _np
-                a = _np.array(series, dtype=float)
-                qs = _np.nanquantile(a, [0.1, 0.5, 0.9])
-                return [("p10", f"{qs[0]:.3f}"), ("p50", f"{qs[1]:.3f}"), ("p90", f"{qs[2]:.3f}")]
+                # specify type so fpdf can embed from bytes
+                pdf.image(io.BytesIO(img_bytes), w=W, type="PNG")
+                _small_gap(pdf)
             except Exception:
-                return []
-        for label in ("low","mid","high"):
-            if label in bands and bands[label] is not None:
-                pdf.cell(0, 6, _sanitize(f"{label}:", pdf.unicode_ok), ln=1)
-                _key_val_rows(_qstat(bands[label]), key_w=18, val_w=pdf.content_w - 18)(pdf)
-        pdf.ln(2)
+                pdf.set_font("Helvetica", "", 10)
+                for name, seq in plot_series.items():
+                    for line in _as_rows(name, seq):
+                        _wrap(pdf, line, W)
+                    _small_gap(pdf)
+        else:
+            pdf.set_font("Helvetica", "", 10)
+            for name, seq in plot_series.items():
+                for line in _as_rows(name, seq):
+                    _wrap(pdf, line, W)
+                _small_gap(pdf)
 
-    # Notes
-    notes = metadata.get("notes")
-    if isinstance(notes, str) and notes.strip():
-        _h2(pdf, "Notes")
-        _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(notes, pdf.unicode_ok), align="L")
-        pdf.ln(2)
+    # Base RYE sequence as last section
+    if rye_series:
+        _section_title(pdf, "RYE sequence", W)
+        pdf.set_font("Helvetica", "", 10)
+        for line in _as_rows("RYE", rye_series):
+            _wrap(pdf, line, W)
 
-    # Footer
-    _body(pdf, 9)
-    pdf.multi_cell(
-        0, 5,
-        _sanitize("Open science by Cody Ryan Jenkins (CC BY 4.0). Metric: RYE (Repair Yield per Energy). TGRM.", pdf.unicode_ok),
-        align="L"
-    )
-
-    # Return bytes (fpdf2 may return bytearray; classic fpdf returns str)
-    out = pdf.output(dest="S")
-    if isinstance(out, (bytes, bytearray)):
-        return bytes(out)
-    return str(out).encode("latin-1", "ignore")
+    out = io.BytesIO()
+    pdf.output(out)
+    return out.getvalue()
