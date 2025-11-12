@@ -1,9 +1,9 @@
 # report.py
 # RYE Report generator — Unicode-safe, link-safe, and section-rich.
-# Works with fpdf2 and your Streamlit app. Includes Interpretation and advanced sections.
+# Drop-in replacement compatible with your app_streamlit.py.
 
 from __future__ import annotations
-import os, io, tempfile
+import os, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
@@ -14,6 +14,7 @@ try:
     from fpdf import FPDF  # fpdf2 or classic fpdf
 except Exception as e:
     raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
+
 
 # -----------------------------
 # Font resolution (NotoSans preferred, DejaVuSans fallback)
@@ -33,7 +34,8 @@ def _resolve_font() -> None:
     elif os.path.exists(DEJAVU_PATH):
         UNICODE_FONT_NAME, UNICODE_FONT_PATH = "DejaVu", DEJAVU_PATH
     else:
-        UNICODE_FONT_NAME = UNICODE_FONT_PATH = None  # use core fonts with sanitization
+        UNICODE_FONT_NAME = UNICODE_FONT_PATH = None  # fall back to core fonts
+
 
 # -----------------------------
 # Text sanitizers & helpers
@@ -70,6 +72,7 @@ def _normalize_doi_or_url(val: str) -> Optional[str]:
         return f"https://{s}"
     return s
 
+
 # -----------------------------
 # PDF shell
 # -----------------------------
@@ -85,6 +88,7 @@ class Report(FPDF):
         _resolve_font()
         try:
             if UNICODE_FONT_PATH and os.path.exists(UNICODE_FONT_PATH):
+                # Register regular face; (optional) add bold later if you add a bold TTF.
                 self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
                 self.unicode_ok = True
             self.alias_nb_pages()
@@ -104,9 +108,11 @@ class Report(FPDF):
             self.set_font("Helvetica", "I", 9)
         self.cell(0, 6, _sanitize(f"Page {self.page_no()}/{{nb}}", self.unicode_ok), align="R")
 
+
 def _font(pdf: Report, style: str = "", size: int = 11) -> None:
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
+        # We only registered the regular face; emulate bold via style if available.
         try:
             pdf.set_font(UNICODE_FONT_NAME, style, size)
         except Exception:
@@ -163,6 +169,7 @@ def _key_val_rows(rows: List[Tuple[str, Union[str, float, int]]], key_w: float, 
             pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
     return render
 
+
 # -----------------------------
 # Small plots into the PDF
 # -----------------------------
@@ -193,6 +200,7 @@ def _add_series_plot(pdf: Report,
         except Exception:
             pass
 
+
 # -----------------------------
 # Main builder
 # -----------------------------
@@ -205,8 +213,10 @@ def build_pdf(
     logo_path: Optional[str] = None,
 ) -> bytes:
     """
+    Build a multi-section PDF and return raw bytes.
+
     metadata accepted keys (all optional):
-      - 'generated' | 'timestamp'
+      - 'generated' | 'timestamp' : shown under title if present
       - 'dataset_link'            : DOI or URL (clickable)
       - 'rolling_window'          : int
       - 'rows'                    : int
@@ -214,7 +224,8 @@ def build_pdf(
       - 'columns'                 : list of column names
       - 'sample_n'                : how many RYE values to print (default 100)
       - 'notes'                   : freeform text
-      - advanced: 'regimes', 'correlation', 'noise_floor', 'bands'
+      - advanced (if available): 'regimes' (list of dicts), 'correlation' (dict),
+                                 'noise_floor' (dict), 'bands' (dict with 'low','mid','high' Series)
     """
     pdf = Report()
     pdf.add_page()
@@ -286,7 +297,7 @@ def build_pdf(
         pdf.set_y(y0 + max(h_left, h_right))
     pdf.ln(2)
 
-    # Columns in dataset
+    # Optional: columns in dataset
     cols = metadata.get("columns")
     if isinstance(cols, (list, tuple)) and cols:
         _h2(pdf, "Columns in dataset")
@@ -294,7 +305,7 @@ def build_pdf(
         pdf.multi_cell(0, 6, _sanitize(", ".join(map(str, cols)), pdf.unicode_ok), align="L")
         pdf.ln(2)
 
-    # Interpretation
+    # Interpretation (auto text if not provided)
     if interpretation:
         interp_text = str(interpretation)
     else:
@@ -315,7 +326,7 @@ def build_pdf(
     pdf.multi_cell(0, 6, _sanitize(interp_text, pdf.unicode_ok), align="L")
     pdf.ln(2)
 
-    # Advanced analytics (only shown if provided)
+    # Advanced analytics (render only if present)
     regimes = metadata.get("regimes")
     if isinstance(regimes, list) and regimes:
         _h2(pdf, "Regimes (sustained zones)")
@@ -329,7 +340,7 @@ def build_pdf(
     if isinstance(corr, dict) and corr:
         _h2(pdf, "Energy ↔ ΔPerformance correlation")
         crows = []
-        if "pearson" in corr:  crows.append(("Pearson",  _fmt_num(corr["pearson"])))
+        if "pearson" in corr: crows.append(("Pearson", _fmt_num(corr["pearson"])))
         if "spearman" in corr: crows.append(("Spearman", _fmt_num(corr["spearman"])))
         if crows:
             _key_val_rows(crows, key_w=key_w, val_w=val_w)(pdf)
@@ -338,13 +349,16 @@ def build_pdf(
     noise = metadata.get("noise_floor")
     if isinstance(noise, dict) and noise:
         _h2(pdf, "Noise floor estimate")
-        nrows = [(str(k), _fmt_num(v)) for k, v in noise.items()]
+        nrows = []
+        for k, v in noise.items():
+            nrows.append((str(k), _fmt_num(v)))
         _key_val_rows(nrows, key_w=key_w, val_w=val_w)(pdf)
         pdf.ln(2)
 
     bands = metadata.get("bands")
     if isinstance(bands, dict) and set(bands.keys()) & {"low","mid","high"}:
         _h2(pdf, "Bootstrap bands (rolling mean)")
+        # Summarize as quantiles to save space
         def _qstat(series) -> List[Tuple[str, str]]:
             try:
                 import numpy as _np
@@ -375,5 +389,9 @@ def build_pdf(
         align="L"
     )
 
+    # Return bytes (fpdf2 may return bytearray; classic fpdf returns str)
     out = pdf.output(dest="S")
-    return out if isinstance(out, (bytes, bytearray)) else str(out).encode("latin-1", errors="replace")
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)
+    # classic fpdf: returns str -> encode safely
+    return str(out).encode("latin-1", "ignore")
