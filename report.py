@@ -3,11 +3,11 @@
 # Unicode-safe (NotoSans or DejaVuSans), clickable links, clean wrapping.
 
 from __future__ import annotations
-import io, os, tempfile
+import os, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
-matplotlib.use("Agg")  # headless
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
@@ -15,11 +15,8 @@ try:
 except Exception as e:
     raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
 
-# -----------------------------
-# Font handling (NotoSans preferred, DejaVu fallback)
-# -----------------------------
+# ---------- Font handling ----------
 FONT_DIR = "fonts"
-# Support both root and fonts/ locations
 ROOT_NOTO = "NotoSans-Regular.ttf"
 ROOT_DEJA = "DejaVuSans.ttf"
 NOTO_PATH = os.path.join(FONT_DIR, ROOT_NOTO)
@@ -29,30 +26,24 @@ UNICODE_FONT_PATH: Optional[str] = None
 UNICODE_FONT_NAME: Optional[str] = None  # set after resolution
 
 def _pick_local_font() -> Optional[Tuple[str, str]]:
-    """Return (font_name, font_path) if a local TTF exists (root or fonts/)."""
-    # Prefer NotoSans
     for name, path in [
         ("NotoSans", NOTO_PATH),
         ("NotoSans", ROOT_NOTO),
-        ("DejaVu", DEJAVU_PATH),
-        ("DejaVu", ROOT_DEJA),
+        ("DejaVu",  DEJAVU_PATH),
+        ("DejaVu",  ROOT_DEJA),
     ]:
         if os.path.exists(path):
             return (name, path)
     return None
 
 def _resolve_font():
-    """Set globals UNICODE_FONT_NAME / UNICODE_FONT_PATH if we can."""
     global UNICODE_FONT_NAME, UNICODE_FONT_PATH
     local = _pick_local_font()
     if local:
         UNICODE_FONT_NAME, UNICODE_FONT_PATH = local
 
-# -----------------------------
-# Text utilities
-# -----------------------------
+# ---------- Text utils ----------
 def _strip_zero_width(s: str) -> str:
-    # Remove zero-width and soft-hyphen characters that can trip encoders
     return (
         s.replace("\u200b", "")
          .replace("\u200e", "")
@@ -61,40 +52,24 @@ def _strip_zero_width(s: str) -> str:
     )
 
 def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
-    """
-    Convert to string; if Unicode font is unavailable, coerce to Latin-1-safe.
-    Also strips zero-width characters.
-    """
-    if isinstance(txt, float):
-        s = f"{txt:.3f}"
-    else:
-        s = str(txt)
+    s = f"{txt:.3f}" if isinstance(txt, float) else str(txt)
     s = _strip_zero_width(s)
     if unicode_ok:
         return s
-    # Fallback: replace non-Latin-1 to avoid Helvetica crashes
     return s.encode("latin-1", "replace").decode("latin-1")
 
 def _fmt_val(v: Union[str, int, float]) -> str:
-    if isinstance(v, float):
-        return f"{v:.3f}"
-    return str(v)
+    return f"{v:.3f}" if isinstance(v, float) else str(v)
 
 def _normalize_doi_or_url(val: str) -> Optional[str]:
-    if not val:
-        return None
+    if not val: return None
     s = str(val).strip()
-    if s.startswith("10."):
-        return f"https://doi.org/{s}"
-    if s.startswith("http://") or s.startswith("https://"):
-        return s
-    if "zenodo.org" in s and not s.startswith("http"):
-        return f"https://{s}"
+    if s.startswith("10."): return f"https://doi.org/{s}"
+    if s.startswith(("http://", "https://")): return s
+    if "zenodo.org" in s and not s.startswith("http"): return f"https://{s}"
     return s
 
-# -----------------------------
-# PDF helpers
-# -----------------------------
+# ---------- PDF helpers ----------
 class Report(FPDF):
     """A4 portrait with margins, auto page breaks, and footer page numbers."""
     def __init__(self):
@@ -107,7 +82,11 @@ class Report(FPDF):
         try:
             _resolve_font()
             if UNICODE_FONT_PATH and os.path.exists(UNICODE_FONT_PATH):
-                self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
+                # Register the same TTF for all styles so set_font(...,"B") etc. work.
+                for style in ("", "B", "I", "BI"):
+                    self.add_font(  # type: ignore[arg-type]
+                        UNICODE_FONT_NAME, style, UNICODE_FONT_PATH, uni=True
+                    )
                 self.unicode_ok = True
             self.alias_nb_pages()
         except Exception:
@@ -129,7 +108,11 @@ class Report(FPDF):
 def _font(pdf: Report, style: str = "", size: int = 11):
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
-        pdf.set_font(UNICODE_FONT_NAME, style, size)
+        # If a style weren't registered for some reason, fall back gracefully.
+        try:
+            pdf.set_font(UNICODE_FONT_NAME, style, size)
+        except Exception:
+            pdf.set_font(UNICODE_FONT_NAME, "", size)
     else:
         pdf.set_font("Helvetica", style, size)
 
@@ -173,16 +156,12 @@ def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]], key_w: float, 
             _font(pdf, "B", 11)
             pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
             _body(pdf, 11)
-            # Ensure we start the value exactly after the key cell
-            x0 = pdf.get_x(); y0 = pdf.get_y()
+            x0 = pdf.get_x();  # after the key cell
             pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
-            # After multi_cell, cursor is at line start; restore left indent for next row
-            pdf.set_x(x0 - key_w)
+            pdf.set_x(x0 - key_w)  # restore left indent for next row
     return render
 
-# -----------------------------
-# Charts
-# -----------------------------
+# ---------- Charts ----------
 def _add_series_plot(pdf: Report,
                      series_dict: Dict[str, Sequence[float]],
                      title: str = "Repair Yield per Energy"):
@@ -205,14 +184,10 @@ def _add_series_plot(pdf: Report,
     try:
         pdf.image(tmp.name, w=pdf.content_w)
     finally:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
+        try: os.unlink(tmp.name)
+        except Exception: pass
 
-# -----------------------------
-# Main builder
-# -----------------------------
+# ---------- Main builder ----------
 def build_pdf(
     rye: Iterable[float],
     summary: Dict[str, Union[float, int, str]],
@@ -226,13 +201,11 @@ def build_pdf(
     if logo_path:
         _add_logo(pdf, logo_path, w=22)
 
-    # Title
     _h1(pdf, "RYE Report")
     pdf.ln(1)
 
     # Dataset metadata
     _h2(pdf, "Dataset metadata")
-    # 42mm key col keeps right edge clean
     key_w = 42
     val_w = pdf.content_w - key_w
 
@@ -241,12 +214,10 @@ def build_pdf(
         url = _normalize_doi_or_url(ds_link_raw)
         _hyperlink(pdf, f"Dataset link: {url}", url or "")
 
-    # Other metadata rows (excluding special keys)
     meta_rows: List[Tuple[str, Union[str, float, int]]] = []
     skip = {"generated", "timestamp", "dataset_link", "columns", "notes", "sample_n"}
     for k, v in metadata.items():
-        if k in skip:
-            continue
+        if k in skip: continue
         meta_rows.append((str(k), _fmt_val(v)))
     if meta_rows:
         _key_val_rows(meta_rows, key_w=key_w, val_w=val_w)(pdf)
@@ -324,8 +295,7 @@ def build_pdf(
         align="L"
     )
 
-    # --- return bytes (fpdf v1 vs v2 compatibility) ---
     out = pdf.output(dest="S")
     if isinstance(out, (bytes, bytearray)):
-        return bytes(out)            # fpdf2 returns bytearray
-    return out.encode("latin-1")     # old fpdf returns str
+        return bytes(out)
+    return out.encode("latin-1")
