@@ -16,6 +16,20 @@ except Exception:
     _HAS_MPL = False
 
 
+# --------------------- Optional preset descriptor ---------------------
+# You can import/use this in your Streamlit app when you define presets.
+MARKETING_PRESET: Dict[str, Any] = {
+    "label": "Marketing",
+    # Typical column roles for a marketing RYE dataset.
+    # Adjust to match your actual CSV headers.
+    "repair_col": "conversion_rate",   # or "ROAS", "revenue_per_click", etc.
+    "energy_col": "spend",             # money or effort being spent
+    "time_col": "date",                # time dimension
+    "domain_col": "campaign",          # segments / campaigns / channels
+    "rolling_window": 7,               # 7-day smoothing often makes sense
+}
+
+
 # --------------------- Small helpers ---------------------
 def _latin1(s: str) -> str:
     """fpdf core fonts are latin-1; replace unsupported chars gracefully."""
@@ -55,6 +69,17 @@ def _fmt_num(v: Any) -> str:
                 return f"{v:.6f}"
             return f"{v:.4f}"
         return str(v)
+    except Exception:
+        return str(v)
+
+
+def _fmt_pct(v: Any) -> str:
+    """Format a fraction like 0.1234 as '12.34 %'."""
+    try:
+        if v is None:
+            return ""
+        v = float(v)
+        return f"{v * 100.0:.2f} %"
     except Exception:
         return str(v)
 
@@ -151,6 +176,69 @@ def _ensure_space(pdf: FPDF, needed_mm: float) -> None:
         pdf.add_page()
 
 
+def _marketing_kpis_section(pdf: FPDF, metadata: Dict[str, Any], W: float) -> None:
+    """
+    Render a Marketing KPIs block when preset == 'Marketing'.
+    It looks for common keys but degrades gracefully if some are missing.
+    """
+    preset_name = str(metadata.get("preset", "")).lower()
+    if preset_name != "marketing":
+        return
+
+    _section_title(pdf, "Marketing KPIs", W)
+    pdf.set_font("Helvetica", "", 11)
+
+    # Core volume metrics
+    impressions = metadata.get("impressions")
+    clicks = metadata.get("clicks")
+    conversions = metadata.get("conversions")
+    spend = metadata.get("spend")
+    revenue = metadata.get("revenue")
+
+    if impressions is not None:
+        _kv(pdf, "Impressions", _fmt_num(impressions), W)
+    if clicks is not None:
+        _kv(pdf, "Clicks", _fmt_num(clicks), W)
+    if conversions is not None:
+        _kv(pdf, "Conversions", _fmt_num(conversions), W)
+    if spend is not None:
+        _kv(pdf, "Spend", _fmt_num(spend), W)
+    if revenue is not None:
+        _kv(pdf, "Revenue", _fmt_num(revenue), W)
+
+    # Efficiency metrics (pre-computed or derived)
+    ctr = metadata.get("ctr") or metadata.get("click_through_rate")
+    cvr = metadata.get("cvr") or metadata.get("conversion_rate")
+    cpc = metadata.get("cpc")
+    cpa = metadata.get("cpa") or metadata.get("cost_per_acquisition")
+    roas = metadata.get("roas") or metadata.get("return_on_ad_spend")
+
+    if ctr is not None:
+        _kv(pdf, "CTR", _fmt_pct(ctr), W)
+    if cvr is not None:
+        _kv(pdf, "CVR", _fmt_pct(cvr), W)
+    if cpc is not None:
+        _kv(pdf, "CPC", _fmt_num(cpc), W)
+    if cpa is not None:
+        _kv(pdf, "CPA", _fmt_num(cpa), W)
+    if roas is not None:
+        _kv(pdf, "ROAS", _fmt_num(roas), W)
+
+    # Experimental / before-vs-after uplift fields
+    uplift_conv_rate = metadata.get("uplift_conversion_rate")
+    uplift_roas = metadata.get("uplift_roas")
+    uplift_revenue = metadata.get("uplift_revenue")
+
+    if uplift_conv_rate is not None:
+        _kv(pdf, "Conversion rate uplift", _fmt_pct(uplift_conv_rate), W)
+    if uplift_roas is not None:
+        _kv(pdf, "ROAS uplift", _fmt_pct(uplift_roas), W)
+    if uplift_revenue is not None:
+        _kv(pdf, "Incremental revenue", _fmt_num(uplift_revenue), W)
+
+    _med_gap(pdf)
+
+
 # --------------------- Main builder ---------------------
 def build_pdf(
     rye_series: List[float],
@@ -208,6 +296,9 @@ def build_pdf(
     else:
         _wrap(pdf, "No interpretation supplied by the app.", W)
     _med_gap(pdf)
+
+    # Marketing-specific KPIs (only if preset == "Marketing")
+    _marketing_kpis_section(pdf, metadata, W)
 
     # Metadata
     if metadata:
