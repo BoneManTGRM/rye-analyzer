@@ -21,7 +21,7 @@ def _latin1(s: str) -> str:
     """fpdf core fonts are latin-1; replace unsupported chars gracefully."""
     if not isinstance(s, str):
         return s
-    # First map common Unicode punctuation to ASCII so we avoid "?" in the PDF
+    # Map common Unicode punctuation to ASCII so we avoid "?" in the PDF
     replacements = {
         "\u2014": "-",   # em dash —
         "\u2013": "-",   # en dash –
@@ -42,6 +42,7 @@ def _latin1(s: str) -> str:
     except Exception:
         return s
 
+
 def _fmt_num(v: Any) -> str:
     try:
         if isinstance(v, int):
@@ -54,10 +55,12 @@ def _fmt_num(v: Any) -> str:
     except Exception:
         return str(v)
 
+
 def _wrap(pdf: FPDF, text: str, w: float, line_h: float = 5.0) -> None:
     if not text:
         return
     pdf.multi_cell(w, line_h, txt=_latin1(text))
+
 
 def _kv(pdf: FPDF, title: str, value: str, w: float) -> None:
     pdf.set_font("Helvetica", "B", 11)
@@ -65,13 +68,20 @@ def _kv(pdf: FPDF, title: str, value: str, w: float) -> None:
     pdf.set_font("Helvetica", "", 11)
     pdf.multi_cell(w * 0.65, 6, _latin1(value))
 
+
 def _section_title(pdf: FPDF, title: str, w: float) -> None:
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(w, 7, _latin1(title))
     pdf.ln(8)
 
-def _small_gap(pdf: FPDF): pdf.ln(2)
-def _med_gap(pdf: FPDF): pdf.ln(4)
+
+def _small_gap(pdf: FPDF):
+    pdf.ln(2)
+
+
+def _med_gap(pdf: FPDF):
+    pdf.ln(4)
+
 
 def _as_rows(name: str, seq: Iterable[float], max_rows: int = 120) -> List[str]:
     vals = list(seq)
@@ -87,7 +97,12 @@ def _as_rows(name: str, seq: Iterable[float], max_rows: int = 120) -> List[str]:
         rows.append("... (truncated)")
     return rows
 
-def _image_from_series(series_dict: Dict[str, List[float]], width_px: int = 1000, height_px: int = 400) -> Optional[bytes]:
+
+def _image_from_series(
+    series_dict: Dict[str, List[float]],
+    width_px: int = 1000,
+    height_px: int = 400
+) -> Optional[bytes]:
     """Return PNG bytes of a simple line plot, or None if plotting fails or matplotlib absent."""
     if not _HAS_MPL:
         return None
@@ -114,12 +129,12 @@ def _image_from_series(series_dict: Dict[str, List[float]], width_px: int = 1000
             pass
         return None
 
+
 def _ensure_space(pdf: FPDF, needed_mm: float) -> None:
     """
     Ensure there is at least `needed_mm` of vertical space left.
-    If not, start a new page. This avoids big blank bands before large blocks.
+    If not, start a new page. This avoids ugly splits.
     """
-    # total page height
     page_h = getattr(pdf, "h", 297)  # A4 ~297mm
     bottom_margin = getattr(pdf, "b_margin", 12)
     y = pdf.get_y()
@@ -223,14 +238,14 @@ def build_pdf(
 
     # Series previews — attempt small plot, else text tables
     if plot_series:
-        # ensure the plot + caption have room; if not, push to new page
-        _ensure_space(pdf, needed_mm=90)
+        # be much less aggressive so we don't waste a page
+        _ensure_space(pdf, needed_mm=20)
         _section_title(pdf, "Series previews", W)
         img_bytes = _image_from_series(plot_series)
         if img_bytes:
             try:
-                # specify type so fpdf can embed from bytes
-                _ensure_space(pdf, needed_mm=80)
+                # let auto_page_break handle overflow; just a small guard
+                _ensure_space(pdf, needed_mm=10)
                 pdf.image(io.BytesIO(img_bytes), w=W, type="PNG")
                 _small_gap(pdf)
             except Exception:
@@ -248,8 +263,8 @@ def build_pdf(
 
     # Base RYE sequence as last section
     if rye_series:
-        # keep this block together reasonably
-        _ensure_space(pdf, needed_mm=60)
+        # keep this block together reasonably, but don't force a huge gap
+        _ensure_space(pdf, needed_mm=25)
         _section_title(pdf, "RYE sequence", W)
         pdf.set_font("Helvetica", "", 10)
         for line in _as_rows("RYE", rye_series):
