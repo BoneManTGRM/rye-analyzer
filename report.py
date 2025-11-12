@@ -2,17 +2,17 @@
 # Build a compact, multi-page PDF report for RYE analyses (Unicode-safe, clickable links, richer metadata).
 
 from __future__ import annotations
-import io, os, tempfile
+import os, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
-matplotlib.use("Agg")  # headless
+matplotlib.use("Agg")  # headless backend for servers
 import matplotlib.pyplot as plt
 
 try:
-    from fpdf import FPDF  # works for fpdf and fpdf2
+    from fpdf import FPDF  # works with both legacy fpdf and modern fpdf2
 except Exception as e:
-    raise RuntimeError("fpdf/fpdf2 is required. Add 'fpdf>=1.7.2' to requirements.txt") from e
+    raise RuntimeError("fpdf/fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
 
 
 # -----------------------------
@@ -24,7 +24,7 @@ UNICODE_FONT_NAME = "DejaVu"
 def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
     """
     Convert any value to str. If we don't have a Unicode font loaded,
-    replace characters outside Latin-1 so classic Helvetica won't crash.
+    replace characters outside Latin-1 so core fonts won't crash.
     """
     s = str(txt)
     if unicode_ok:
@@ -47,29 +47,24 @@ def _normalize_doi_or_url(val: str) -> Optional[str]:
     if not val:
         return None
     s = str(val).strip()
-    if s.startswith("10."):
+    if s.startswith("10."):  # DOI
         return f"https://doi.org/{s}"
-    if s.startswith("http://") or s.startswith("https://"):
+    if s.startswith(("http://", "https://")):
         return s
-    # mild heuristic: user pasted zenodo record id
-    if "zenodo.org" in s and not s.startswith("http"):
+    if "zenodo.org" in s and not s.startswith(("http://", "https://")):
         return f"https://{s}"
     return s
 
 def _hyperlink(pdf: "Report", text: str, url: str):
-    """
-    Render a clickable link (blue + underline if unicode font available).
-    """
-    url = url.strip()
+    """Render a clickable link (blue + underline if possible)."""
+    url = (url or "").strip()
     if not url:
         pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L")
         return
-    # choose font/underline style
+    pdf.set_text_color(0, 0, 200)
     if pdf.unicode_ok:
-        pdf.set_text_color(0, 0, 200)
         pdf.set_font(UNICODE_FONT_NAME, "U", 11)
     else:
-        pdf.set_text_color(0, 0, 200)
         pdf.set_font("Helvetica", "U", 11)
     pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L", link=url)
     # restore defaults
@@ -90,7 +85,6 @@ class Report(FPDF):
         self.set_margins(12, 12, 12)
         self.set_auto_page_break(auto=True, margin=15)
         self.set_text_color(0, 0, 0)
-
         self.unicode_ok = False
         try:
             if os.path.exists(UNICODE_FONT_PATH):
@@ -115,7 +109,6 @@ class Report(FPDF):
 
 
 def _font(pdf: Report, style: str = "", size: int = 11):
-    """Use Unicode font if available; otherwise Helvetica. Always reset text color to black."""
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
         pdf.set_font(UNICODE_FONT_NAME, style, size)
@@ -123,12 +116,10 @@ def _font(pdf: Report, style: str = "", size: int = 11):
         pdf.set_font("Helvetica", style, size)
 
 def _h1(pdf: Report, text: str):
-    _font(pdf, "B", 18)
-    pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
+    _font(pdf, "B", 18); pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
 
 def _h2(pdf: Report, text: str):
-    _font(pdf, "B", 13)
-    pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
+    _font(pdf, "B", 13); pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
 
 def _body(pdf: Report, size: int = 11):
     _font(pdf, "", size)
@@ -161,9 +152,11 @@ def _key_val_rows(
 # -----------------------------
 # Charts
 # -----------------------------
-def _add_series_plot(pdf: Report,
-                     series_dict: Dict[str, Sequence[float]],
-                     title: str = "Repair Yield per Energy"):
+def _add_series_plot(
+    pdf: Report,
+    series_dict: Dict[str, Sequence[float]],
+    title: str = "Repair Yield per Energy"
+):
     """Render a simple line chart into the PDF using matplotlib."""
     fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
     for label, series in series_dict.items():
@@ -231,7 +224,7 @@ def build_pdf(
     _h2(pdf, "Dataset metadata")
     meta_rows: List[Tuple[str, Union[str, float, int]]] = []
 
-    # render link if provided
+    # clickable dataset link
     ds_link_raw = str(metadata.get("dataset_link", "") or "").strip()
     if ds_link_raw:
         url = _normalize_doi_or_url(ds_link_raw)
@@ -239,7 +232,7 @@ def build_pdf(
             _body(pdf, 11)
             _hyperlink(pdf, f"Dataset link: {url}", url)
 
-    # add other metadata (except special keys we render separately)
+    # other metadata (skip special keys)
     for k, v in metadata.items():
         if k in ("generated", "timestamp", "dataset_link", "columns", "notes", "sample_n"):
             continue
@@ -248,7 +241,7 @@ def build_pdf(
         _key_val_rows(meta_rows, key_w=40, val_w=pdf.content_w - 40)(pdf)
     pdf.ln(2)
 
-    # Summary statistics (includes anything you pass, e.g., 'resilience')
+    # Summary statistics (includes 'resilience' if supplied)
     _h2(pdf, "Summary statistics")
     items: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in summary.items():
@@ -291,4 +284,47 @@ def build_pdf(
     cols = metadata.get("columns")
     if isinstance(cols, (list, tuple)) and len(cols) > 0:
         _h2(pdf, "Columns in dataset")
-        _body(pdf, 11
+        _body(pdf, 11)
+        pdf.multi_cell(0, 6, _sanitize(", ".join(map(str, cols)), pdf.unicode_ok), align="L")
+        pdf.ln(2)
+
+    # Optional: Notes
+    notes = metadata.get("notes")
+    if isinstance(notes, str) and notes.strip():
+        _h2(pdf, "Notes")
+        _body(pdf, 11)
+        pdf.multi_cell(0, 6, _sanitize(notes.strip(), pdf.unicode_ok), align="L")
+        pdf.ln(2)
+
+    # Interpretation (auto-generate if not supplied)
+    if not interpretation:
+        mean = float(summary.get("mean", 0.0) or 0.0)
+        minv = float(summary.get("min", 0.0) or 0.0)
+        maxv = float(summary.get("max", 0.0) or 0.0)
+        level = "high" if mean > 0.6 else ("moderate" if mean > 0.3 else "modest")
+        interpretation = (
+            f"Average efficiency (RYE mean) is {mean:.3f}, within [{minv:.3f}, {maxv:.3f}]. "
+            f"Overall efficiency is {level}. Look for low-yield segments to prune or repair. "
+            "Use a rolling window to smooth short-term noise, map spikes/dips to events, "
+            "and iterate TGRM loops (detect -> minimal fix -> verify) to lift average RYE "
+            "and compress variance."
+        )
+    _h2(pdf, "Interpretation")
+    _body(pdf, 11)
+    pdf.multi_cell(0, 6, _sanitize(interpretation, pdf.unicode_ok), align="L")
+    pdf.ln(4)
+
+    # Footer note / provenance
+    _body(pdf, 10); pdf.cell(0, 6, _sanitize("RYE.", pdf.unicode_ok), ln=1)
+    _body(pdf, 9)
+    footer = (
+        "Open science by Cody Ryan Jenkins (CC BY 4.0). "
+        "Learn more: Reparodynamics • RYE (Repair Yield per Energy) • TGRM."
+    )
+    pdf.multi_cell(0, 5, _sanitize(footer, pdf.unicode_ok), align="L")
+
+    # Return exact bytes (fpdf2 returns bytes; classic fpdf returns latin-1 str)
+    out = pdf.output(dest="S")
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)
+    return str(out).encode("latin-1", errors="replace")
