@@ -1,95 +1,62 @@
 # report.py
-# Build a compact, multi-page PDF report for RYE analyses.
-# Unicode-safe (NotoSans or DejaVuSans), clickable links, clean wrapping.
+# RYE Report generator — Unicode-safe, link-safe, and section-rich.
+# Works with fpdf2 and your Streamlit app. Includes Interpretation and advanced sections.
 
 from __future__ import annotations
-import io, os, tempfile
+import os, io, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
-matplotlib.use("Agg")  # headless
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
-    from fpdf import FPDF  # fpdf2
+    from fpdf import FPDF  # fpdf2 or classic fpdf
 except Exception as e:
     raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
 
 # -----------------------------
-# Font handling (NotoSans preferred, DejaVu fallback)
+# Font resolution (NotoSans preferred, DejaVuSans fallback)
 # -----------------------------
 FONT_DIR = "fonts"
 NOTO_PATH = os.path.join(FONT_DIR, "NotoSans-Regular.ttf")
 DEJAVU_PATH = os.path.join(FONT_DIR, "DejaVuSans.ttf")
 
-UNICODE_FONT_PATH = None
-UNICODE_FONT_NAME = None  # set after resolution
+UNICODE_FONT_NAME: Optional[str] = None
+UNICODE_FONT_PATH: Optional[str] = None
 
-def _pick_local_font() -> Optional[Tuple[str, str]]:
-    """Return (font_name, font_path) if a local TTF exists."""
-    if os.path.exists(NOTO_PATH):
-        return ("NotoSans", NOTO_PATH)
-    if os.path.exists(DEJAVU_PATH):
-        return ("DejaVu", DEJAVU_PATH)
-    return None
-
-def _try_fetch_font() -> Optional[Tuple[str, str]]:
-    """Try to download a font into fonts/. Returns (name, path) or None."""
-    try:
-        import requests
-    except Exception:
-        return None
-
-    os.makedirs(FONT_DIR, exist_ok=True)
-    candidates = [
-        ("DejaVu", "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf", DEJAVU_PATH),
-        ("DejaVu", "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@master/ttf/DejaVuSans.ttf", DEJAVU_PATH),
-        ("NotoSans", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf", NOTO_PATH),
-    ]
-    for name, url, path in candidates:
-        try:
-            r = requests.get(url, timeout=10)
-            if r.ok and len(r.content) > 100_000:
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                return (name, path)
-        except Exception:
-            continue
-    return None
-
-def _resolve_font():
-    """Set globals UNICODE_FONT_NAME / UNICODE_FONT_PATH if we can."""
+def _resolve_font() -> None:
+    """Pick a local Unicode-capable TTF if available."""
     global UNICODE_FONT_NAME, UNICODE_FONT_PATH
-    local = _pick_local_font()
-    if local:
-        UNICODE_FONT_NAME, UNICODE_FONT_PATH = local
-        return
-    fetched = _try_fetch_font()
-    if fetched:
-        UNICODE_FONT_NAME, UNICODE_FONT_PATH = fetched
+    if os.path.exists(NOTO_PATH):
+        UNICODE_FONT_NAME, UNICODE_FONT_PATH = "NotoSans", NOTO_PATH
+    elif os.path.exists(DEJAVU_PATH):
+        UNICODE_FONT_NAME, UNICODE_FONT_PATH = "DejaVu", DEJAVU_PATH
+    else:
+        UNICODE_FONT_NAME = UNICODE_FONT_PATH = None  # use core fonts with sanitization
 
 # -----------------------------
-# Text utilities
+# Text sanitizers & helpers
 # -----------------------------
+_ZW = ("\u200b", "\u200e", "\u200f", "\xad")  # zero-width & soft hyphen
+
 def _strip_zero_width(s: str) -> str:
-    # Remove zero-width and soft hyphen characters that can trip core fonts
-    return s.replace("\u200b", "").replace("\u200e", "").replace("\u200f", "").replace("\xad", "")
+    for z in _ZW:
+        s = s.replace(z, "")
+    return s
 
-def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
-    """
-    Convert to string; if Unicode font is unavailable, coerce to Latin-1-safe.
-    Also strips zero-width characters.
-    """
-    s = str(txt) if not isinstance(txt, float) else f"{txt:.3f}"
-    s = _strip_zero_width(s)
-    if unicode_ok:
-        return s
-    return s.encode("latin-1", "replace").decode("latin-1")
-
-def _fmt_val(v: Union[str, int, float]) -> str:
+def _fmt_num(v: Union[str, int, float]) -> str:
     if isinstance(v, float):
         return f"{v:.3f}"
     return str(v)
+
+def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
+    """Return safe text for current font; remove zero-width characters."""
+    s = _strip_zero_width(_fmt_num(txt))
+    if unicode_ok:
+        return s
+    # Core fonts only support latin-1; protect to avoid crashes.
+    return s.encode("latin-1", "replace").decode("latin-1")
 
 def _normalize_doi_or_url(val: str) -> Optional[str]:
     if not val:
@@ -104,26 +71,29 @@ def _normalize_doi_or_url(val: str) -> Optional[str]:
     return s
 
 # -----------------------------
-# PDF helpers
+# PDF shell
 # -----------------------------
 class Report(FPDF):
-    """A4 portrait with margins, auto page breaks, and footer page numbers."""
+    """A4 portrait, clean margins, page numbers."""
     def __init__(self):
         super().__init__(orientation="P", unit="mm", format="A4")
         self.set_margins(12, 12, 12)
         self.set_auto_page_break(auto=True, margin=15)
         self.set_text_color(0, 0, 0)
-
         self.unicode_ok = False
+
+        _resolve_font()
         try:
-            _resolve_font()
             if UNICODE_FONT_PATH and os.path.exists(UNICODE_FONT_PATH):
                 self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
-                # also allow bold via core faux bold if needed (fpdf2 handles style flag)
                 self.unicode_ok = True
             self.alias_nb_pages()
         except Exception:
-            self.unicode_ok = False  # fall back to core font
+            self.unicode_ok = False
+
+    @property
+    def content_w(self) -> float:
+        return self.w - self.l_margin - self.r_margin
 
     def footer(self):
         self.set_y(-12)
@@ -134,29 +104,28 @@ class Report(FPDF):
             self.set_font("Helvetica", "I", 9)
         self.cell(0, 6, _sanitize(f"Page {self.page_no()}/{{nb}}", self.unicode_ok), align="R")
 
-    @property
-    def content_w(self) -> float:
-        return self.w - self.l_margin - self.r_margin
-
-def _font(pdf: Report, style: str = "", size: int = 11):
+def _font(pdf: Report, style: str = "", size: int = 11) -> None:
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
-        pdf.set_font(UNICODE_FONT_NAME, style, size)
+        try:
+            pdf.set_font(UNICODE_FONT_NAME, style, size)
+        except Exception:
+            pdf.set_font(UNICODE_FONT_NAME, "", size)
     else:
         pdf.set_font("Helvetica", style, size)
 
-def _h1(pdf: Report, text: str):
+def _h1(pdf: Report, text: str) -> None:
     _font(pdf, "B", 18)
     pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
 
-def _h2(pdf: Report, text: str):
+def _h2(pdf: Report, text: str) -> None:
     _font(pdf, "B", 13)
     pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
 
-def _body(pdf: Report, size: int = 11):
+def _body(pdf: Report, size: int = 11) -> None:
     _font(pdf, "", size)
 
-def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
+def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0) -> None:
     try:
         if os.path.exists(path):
             x = pdf.w - pdf.r_margin - w
@@ -165,23 +134,29 @@ def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
     except Exception:
         pass
 
-def _hyperlink(pdf: Report, text: str, url: str):
+def _hyperlink(pdf: Report, label: str, url: Optional[str]) -> None:
+    """Clickable link line; robust even if unicode font is unavailable."""
     url = (url or "").strip()
+    text = f"{label}: {url}" if url else label
     if not url:
         pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L")
         return
+    pdf.set_text_color(0, 0, 200)
     if pdf.unicode_ok:
-        pdf.set_text_color(0, 0, 200); pdf.set_font(UNICODE_FONT_NAME, "U", 11)
+        try:
+            pdf.set_font(UNICODE_FONT_NAME, "U", 11)
+        except Exception:
+            pdf.set_font(UNICODE_FONT_NAME, "", 11)
     else:
-        pdf.set_text_color(0, 0, 200); pdf.set_font("Helvetica", "U", 11)
+        pdf.set_font("Helvetica", "U", 11)
     pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L", link=url)
     pdf.set_text_color(0, 0, 0)
     _body(pdf, 11)
 
-def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]], key_w: float, val_w: float):
-    """Print aligned key:value rows with wrapping."""
-    def render(pdf: Report):
-        for k, v in data:
+def _key_val_rows(rows: List[Tuple[str, Union[str, float, int]]], key_w: float, val_w: float):
+    """Wrapped key/value rows that respect the page width."""
+    def render(pdf: Report) -> None:
+        for k, v in rows:
             _font(pdf, "B", 11)
             pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
             _body(pdf, 11)
@@ -189,14 +164,14 @@ def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]], key_w: float, 
     return render
 
 # -----------------------------
-# Charts
+# Small plots into the PDF
 # -----------------------------
 def _add_series_plot(pdf: Report,
                      series_dict: Dict[str, Sequence[float]],
-                     title: str = "Repair Yield per Energy"):
+                     title: str = "Repair Yield per Energy") -> None:
     fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
     for label, series in series_dict.items():
-        ax.plot(range(len(series)), list(series), label=label, linewidth=1.8)
+        ax.plot(range(len(series)), list(series), label=str(label), linewidth=1.8)
     ax.set_title(title)
     ax.set_xlabel("Index")
     ax.set_ylabel("RYE")
@@ -224,58 +199,71 @@ def _add_series_plot(pdf: Report,
 def build_pdf(
     rye: Iterable[float],
     summary: Dict[str, Union[float, int, str]],
-    metadata: Dict[str, Union[str, int, float]],
+    metadata: Dict[str, Union[str, int, float, list, dict]],
     plot_series: Optional[Union[Dict[str, Sequence[float]], List[Dict[str, Sequence[float]]]]] = None,
     interpretation: Optional[str] = None,
     logo_path: Optional[str] = None,
-    plot_title_override: Optional[str] = None,
 ) -> bytes:
+    """
+    metadata accepted keys (all optional):
+      - 'generated' | 'timestamp'
+      - 'dataset_link'            : DOI or URL (clickable)
+      - 'rolling_window'          : int
+      - 'rows'                    : int
+      - 'preset', 'repair_col', 'energy_col', 'time_col', 'domain_col'
+      - 'columns'                 : list of column names
+      - 'sample_n'                : how many RYE values to print (default 100)
+      - 'notes'                   : freeform text
+      - advanced: 'regimes', 'correlation', 'noise_floor', 'bands'
+    """
     pdf = Report()
     pdf.add_page()
     if logo_path:
         _add_logo(pdf, logo_path, w=22)
 
-    # Title
+    # Title & when
     _h1(pdf, "RYE Report")
-    pdf.ln(1)
+    when = str(metadata.get("generated") or metadata.get("timestamp") or "").strip()
+    if when:
+        _body(pdf, 10)
+        pdf.cell(0, 6, _sanitize(f"Generated: {when}", pdf.unicode_ok), ln=1)
+    pdf.ln(2)
 
     # Dataset metadata
     _h2(pdf, "Dataset metadata")
     key_w = 42
     val_w = pdf.content_w - key_w
+    raw_link = str(metadata.get("dataset_link", "") or "").strip()
+    if raw_link:
+        url = _normalize_doi_or_url(raw_link)
+        _hyperlink(pdf, "Dataset link", url)
 
-    ds_link_raw = str(metadata.get("dataset_link", "") or "").strip()
-    if ds_link_raw:
-        url = _normalize_doi_or_url(ds_link_raw)
-        _hyperlink(pdf, f"Dataset link: {url}", url or "")
-
-    # Other metadata
-    meta_rows: List[Tuple[str, Union[str, float, int]]] = []
-    skip = {"generated", "timestamp", "dataset_link", "columns", "notes", "sample_n"}
+    skip_keys = {"generated", "timestamp", "dataset_link", "columns", "notes",
+                 "sample_n", "regimes", "correlation", "noise_floor", "bands"}
+    rows = []
     for k, v in metadata.items():
-        if k in skip:
+        if k in skip_keys:
             continue
-        meta_rows.append((str(k), _fmt_val(v)))
-    if meta_rows:
-        _key_val_rows(meta_rows, key_w=key_w, val_w=val_w)(pdf)
-    pdf.ln(1)
+        rows.append((str(k), _fmt_num(v)))
+    if rows:
+        _key_val_rows(rows, key_w=key_w, val_w=val_w)(pdf)
+    pdf.ln(2)
 
     # Summary statistics
     _h2(pdf, "Summary statistics")
-    items = [(str(k), _fmt_val(v)) for k, v in summary.items()]
-    _key_val_rows(items, key_w=key_w, val_w=val_w)(pdf)
-    pdf.ln(1)
+    sum_rows = [(str(k), _fmt_num(v)) for k, v in summary.items()]
+    _key_val_rows(sum_rows, key_w=key_w, val_w=val_w)(pdf)
+    pdf.ln(2)
 
     # Plots
     if plot_series:
-        title = plot_title_override or "Repair Yield per Energy"
         if isinstance(plot_series, dict):
-            _add_series_plot(pdf, plot_series, title=title)
+            _add_series_plot(pdf, plot_series)
         elif isinstance(plot_series, list):
             for ps in plot_series:
                 if isinstance(ps, dict):
-                    _add_series_plot(pdf, ps, title=title)
-        pdf.ln(1)
+                    _add_series_plot(pdf, ps)
+        pdf.ln(2)
 
     # Sample values (two columns)
     n_show = int(metadata.get("sample_n", 100) or 100)
@@ -296,42 +284,96 @@ def build_pdf(
         pdf.multi_cell(col_w, 6, _sanitize(rtxt, pdf.unicode_ok), align="L")
         h_right = pdf.get_y() - y0
         pdf.set_y(y0 + max(h_left, h_right))
-    pdf.ln(1)
+    pdf.ln(2)
 
-    # Columns
+    # Columns in dataset
     cols = metadata.get("columns")
-    if isinstance(cols, (list, tuple)) and len(cols) > 0:
+    if isinstance(cols, (list, tuple)) and cols:
         _h2(pdf, "Columns in dataset")
         _body(pdf, 11)
         pdf.multi_cell(0, 6, _sanitize(", ".join(map(str, cols)), pdf.unicode_ok), align="L")
-        pdf.ln(1)
+        pdf.ln(2)
 
     # Interpretation
     if interpretation:
-        _h2(pdf, "Interpretation")
+        interp_text = str(interpretation)
+    else:
+        mean = float(summary.get("mean", 0.0) or 0.0)
+        minv = float(summary.get("min", 0.0) or 0.0)
+        maxv = float(summary.get("max", 0.0) or 0.0)
+        resil = summary.get("resilience", None)
+        level = "high" if mean > 0.6 else ("moderate" if mean > 0.3 else "modest")
+        extra = f" Resilience index {resil:.3f} indicates stability." if isinstance(resil, (int, float)) else ""
+        interp_text = (
+            f"Average efficiency (RYE mean) is {mean:.3f}, spanning [{minv:.3f}, {maxv:.3f}]. "
+            f"Overall efficiency is {level}.{extra} "
+            "Use a rolling window to smooth short-term noise, map spikes/dips to interventions, "
+            "and iterate TGRM loops (detect → minimal fix → verify) to lift mean RYE and compress variance."
+        )
+    _h2(pdf, "Interpretation")
+    _body(pdf, 11)
+    pdf.multi_cell(0, 6, _sanitize(interp_text, pdf.unicode_ok), align="L")
+    pdf.ln(2)
+
+    # Advanced analytics (only shown if provided)
+    regimes = metadata.get("regimes")
+    if isinstance(regimes, list) and regimes:
+        _h2(pdf, "Regimes (sustained zones)")
         _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(interpretation, pdf.unicode_ok), align="L")
-        pdf.ln(1)
+        for r in regimes[:200]:
+            line = f"[{int(r.get('start', 0))} – {int(r.get('end', 0))}]  {str(r.get('label',''))}"
+            pdf.multi_cell(0, 6, _sanitize(line, pdf.unicode_ok), align="L")
+        pdf.ln(2)
+
+    corr = metadata.get("correlation")
+    if isinstance(corr, dict) and corr:
+        _h2(pdf, "Energy ↔ ΔPerformance correlation")
+        crows = []
+        if "pearson" in corr:  crows.append(("Pearson",  _fmt_num(corr["pearson"])))
+        if "spearman" in corr: crows.append(("Spearman", _fmt_num(corr["spearman"])))
+        if crows:
+            _key_val_rows(crows, key_w=key_w, val_w=val_w)(pdf)
+            pdf.ln(2)
+
+    noise = metadata.get("noise_floor")
+    if isinstance(noise, dict) and noise:
+        _h2(pdf, "Noise floor estimate")
+        nrows = [(str(k), _fmt_num(v)) for k, v in noise.items()]
+        _key_val_rows(nrows, key_w=key_w, val_w=val_w)(pdf)
+        pdf.ln(2)
+
+    bands = metadata.get("bands")
+    if isinstance(bands, dict) and set(bands.keys()) & {"low","mid","high"}:
+        _h2(pdf, "Bootstrap bands (rolling mean)")
+        def _qstat(series) -> List[Tuple[str, str]]:
+            try:
+                import numpy as _np
+                a = _np.array(series, dtype=float)
+                qs = _np.nanquantile(a, [0.1, 0.5, 0.9])
+                return [("p10", f"{qs[0]:.3f}"), ("p50", f"{qs[1]:.3f}"), ("p90", f"{qs[2]:.3f}")]
+            except Exception:
+                return []
+        for label in ("low","mid","high"):
+            if label in bands and bands[label] is not None:
+                pdf.cell(0, 6, _sanitize(f"{label}:", pdf.unicode_ok), ln=1)
+                _key_val_rows(_qstat(bands[label]), key_w=18, val_w=pdf.content_w - 18)(pdf)
+        pdf.ln(2)
 
     # Notes
     notes = metadata.get("notes")
-    if notes:
+    if isinstance(notes, str) and notes.strip():
         _h2(pdf, "Notes")
         _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(str(notes), pdf.unicode_ok), align="L")
-        pdf.ln(1)
+        pdf.multi_cell(0, 6, _sanitize(notes, pdf.unicode_ok), align="L")
+        pdf.ln(2)
 
-    # Footer attribution
+    # Footer
     _body(pdf, 9)
     pdf.multi_cell(
         0, 5,
-        _sanitize(
-            "Open science by Cody Ryan Jenkins (CC BY 4.0). "
-            "Metric: RYE (Repair Yield per Energy). TGRM.",
-            pdf.unicode_ok
-        ),
+        _sanitize("Open science by Cody Ryan Jenkins (CC BY 4.0). Metric: RYE (Repair Yield per Energy). TGRM.", pdf.unicode_ok),
         align="L"
     )
 
-    # fpdf2 returns a bytearray for dest="S" in newer versions — wrap with bytes()
-    return bytes(pdf.output(dest="S"))
+    out = pdf.output(dest="S")
+    return out if isinstance(out, (bytes, bytearray)) else str(out).encode("latin-1", errors="replace")
