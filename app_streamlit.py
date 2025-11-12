@@ -1,57 +1,103 @@
 # app_streamlit.py
 # RYE Analyzer — rich, mobile-friendly Streamlit app with:
-# - CSV/TSV/XLS/XLSX ingest
-# - Presets & tooltips
-# - Rolling window & energy simulator
-# - Single / Compare / Multi-domain / Reports tabs
-# - Advanced analytics (regimes, correlation, noise floor, bootstrap bands) if your core.py provides them
-# - Robust PDF generation & diagnostics
-# - Extra charts (histogram, scatter energy vs Δperformance)
+# CSV/TSV/XLS/XLSX ingest • Presets & tooltips • Rolling window & energy simulator
+# Single / Compare / Multi-domain / Reports tabs • Advanced analytics (if present)
+# Robust PDF generation & diagnostics • Extra charts (histogram, energy vs Δperformance)
 
 from __future__ import annotations
 import io, json, os, sys, traceback, importlib.util
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# ---------------- Local helpers from core.py ----------------
-from core import (
-    load_table,
-    normalize_columns,
-    PRESETS,
-    compute_rye_from_df,
-    rolling_series,
-    safe_float,
-    summarize_series,  # should return at least mean/median/min/max/std and optionally 'resilience'
-)
-
-# --- Optional advanced analytics (guarded imports; app degrades gracefully if missing) ---
+# ---------------- Try to import PRESETS ----------------
+PRESETS = None
+preset_import_error: Optional[str] = None
 try:
-    from core import detect_regimes                       # (series: array) -> list[{"start","end","label"}]
+    from presets import PRESETS as _PRESETS  # preferred location
+    PRESETS = _PRESETS
+except Exception as e1:
+    try:
+        from core import PRESETS as _PRESETS  # fallback if kept in core.py
+        PRESETS = _PRESETS
+    except Exception as e2:
+        preset_import_error = f"Could not import PRESETS (presets.py/core.py). Using a tiny default. {e1} / {e2}"
+        PRESETS = {
+            "Generic": type("Preset", (), {
+                "name": "Generic",
+                "time": ["time"],
+                "performance": ["performance"],
+                "energy": ["energy"],
+                "domain": "domain",
+                "default_rolling": 10,
+                "tooltips": {"Generic": "Basic preset used when presets are not available."}
+            })()
+        }
+
+# ---------------- Import core helpers (with graceful fallbacks) ----------------
+from core import load_table, normalize_columns, safe_float
+
+# compute_rye_from_df may be named differently in older cores; alias whichever exists
+try:
+    from core import compute_rye_from_df as _compute_rye_from_df
+except Exception:
+    try:
+        from core import compute_rye as _compute_rye_from_df  # older name
+    except Exception as e:
+        raise ImportError(
+            "Neither compute_rye_from_df nor compute_rye found in core.py — add one of them."
+        ) from e
+
+# summarize function may be named summarize_series or summarize
+try:
+    from core import summarize_series as _summarize_series
+except Exception:
+    try:
+        from core import summarize as _summarize_series
+    except Exception as e:
+        raise ImportError(
+            "Neither summarize_series nor summarize found in core.py — add one of them."
+        ) from e
+
+# rolling_series is optional; provide a pandas fallback if missing
+try:
+    from core import rolling_series as _rolling_series
+except Exception:
+    def _rolling_series(arr, window: int):
+        s = pd.Series(arr, dtype=float)
+        if window <= 1:
+            return s.fillna(0.0).values
+        return s.rolling(window=window, min_periods=1).mean().values
+
+# Optional advanced analytics (each may be absent)
+try:
+    from core import detect_regimes
 except Exception:
     detect_regimes = None
 
 try:
-    from core import energy_delta_performance_correlation # (df, perf_col, energy_col) -> {"pearson":..., "spearman":...}
+    from core import energy_delta_performance_correlation
 except Exception:
     energy_delta_performance_correlation = None
 
 try:
-    from core import estimate_noise_floor                 # (series) -> dict
+    from core import estimate_noise_floor
 except Exception:
     estimate_noise_floor = None
 
 try:
-    from core import bootstrap_rolling_mean               # (series, window, n_boot=100) -> {"low":seq,"mid":seq,"high":seq}
+    from core import bootstrap_rolling_mean
 except Exception:
     bootstrap_rolling_mean = None
 
 # ---------------- PDF builder (optional) + diagnostics ----------------
 def _probe_fpdf_version() -> str:
     try:
-        import fpdf  # fpdf2 exposes __version__
+        import fpdf
         ver = getattr(fpdf, "__version__", "installed (version unknown)")
         return f"fpdf module found: {ver}"
     except Exception as e:
@@ -64,7 +110,7 @@ try:
     if spec is None:
         _pdf_import_error = "report.py not found in the working directory."
     else:
-        from report import build_pdf  # noqa: F401
+        from report import build_pdf  # noqa
 except Exception:
     _pdf_import_error = traceback.format_exc()
 
@@ -76,20 +122,19 @@ def note(msg: str):
     st.caption(msg)
 
 def add_stability_bands(fig: go.Figure, y_max_hint: float | None = None):
-    """Soft overlays for quick visual interpretation."""
     top = y_max_hint if y_max_hint is not None else 1.0
     fig.add_hrect(y0=0.6, y1=max(0.6, top), fillcolor="green", opacity=0.08, line_width=0)
     fig.add_hrect(y0=0.3, y1=0.6,             fillcolor="yellow", opacity=0.08, line_width=0)
     fig.add_hrect(y0=min(-0.5, 0.3 - 1.0), y1=0.3, fillcolor="red", opacity=0.08, line_width=0)
 
 def _delta_performance(series):
-    """First-difference of performance (for scatter against energy)."""
     arr = pd.Series(series, dtype=float)
     return arr.diff().fillna(0.0).values
 
 # ---------------- Page config ----------------
 st.set_page_config(page_title="RYE Analyzer", page_icon="📈", layout="wide")
 st.title("RYE Analyzer")
+
 with st.expander("What is RYE?"):
     st.write(
         "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into "
@@ -104,7 +149,7 @@ with st.sidebar:
     preset_name = st.selectbox("Preset", list(PRESETS.keys()), index=0)
     preset = PRESETS.get(preset_name, next(iter(PRESETS.values())))
 
-    # Optional tiny helper text from preset tooltips if your PRESETS include them
+    # Optional tooltips per preset
     ttips = getattr(preset, "tooltips", None) or {}
     if isinstance(ttips, dict) and ttips:
         with st.popover("Preset tips", use_container_width=True):
@@ -117,7 +162,6 @@ with st.sidebar:
 
     st.divider()
     st.write("Column names in your data")
-    # Try to choose defaults from preset lists if present
     def _first_or(default, lst): return (lst[0] if isinstance(lst, list) and lst else default)
     col_time   = st.text_input("Time column (optional)", value=_first_or("time", getattr(preset, "time", ["time"])))
     col_domain = st.text_input("Domain column (optional)", value=getattr(preset, "domain", "domain") or "domain")
@@ -127,12 +171,12 @@ with st.sidebar:
     st.divider()
     default_window = int(getattr(preset, "default_rolling", 10) or 10)
     window = st.number_input("Rolling window", min_value=1, max_value=1000, value=default_window, step=1,
-                             help="A moving average length applied to the RYE series for smoothing.")
+                             help="Moving average length applied to the RYE series for smoothing.")
 
     st.divider()
     st.write("Energy simulator")
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05,
-                           help="Try what-if scenarios by scaling energy up or down before computing RYE.")
+                           help="What-if: scale energy before computing RYE.")
 
     st.divider()
     doi_or_link = st.text_input(
@@ -142,7 +186,8 @@ with st.sidebar:
     )
 
     st.divider()
-    st.write("No data yet")
+    if preset_import_error:
+        st.info(preset_import_error)
     if st.button("Download example CSV"):
         example = pd.DataFrame({
             "time": np.arange(0, 15),
@@ -158,8 +203,8 @@ def load_any(file) -> pd.DataFrame | None:
     if file is None:
         return None
     try:
-        df = load_table(file)          # supports csv/tsv/xls/xlsx
-        df = normalize_columns(df)     # snake_case headers
+        df = load_table(file)
+        df = normalize_columns(df)
         if df.empty:
             st.error("The file was read successfully, but it contains no rows.")
             return None
@@ -182,13 +227,11 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float) -> dict:
     if col_energy in df_sim.columns:
         df_sim[col_energy] = pd.to_numeric(df_sim[col_energy], errors="coerce").apply(lambda x: safe_float(x) * sim_mult)
 
-    # Base series
-    rye = compute_rye_from_df(df_sim, repair_col=col_repair, energy_col=col_energy)
-    rye_roll = rolling_series(rye, window)
+    rye = _compute_rye_from_df(df_sim, repair_col=col_repair, energy_col=col_energy)
+    rye_roll = _rolling_series(rye, window)
 
-    # Summaries
-    summary = summarize_series(rye)
-    summary_roll = summarize_series(rye_roll)
+    summary = _summarize_series(rye)
+    summary_roll = _summarize_series(rye_roll)
 
     out = {
         "label": label,
@@ -202,7 +245,7 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float) -> dict:
     # Optional advanced analytics
     try:
         if detect_regimes is not None:
-            out["regimes"] = detect_regimes(rye_roll if len(rye_roll) >= window else rye)
+            out["regimes"] = detect_regimes(rye_roll if len(rye_roll) >= max(3, window) else rye)
     except Exception:
         out["regimes"] = None
 
@@ -242,12 +285,10 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
         lines.append("Efficiency is solid. Trim energy overhead and target low-yield segments to lift the mean further.")
     else:
         lines.append("Efficiency is modest. Hunt for high-energy/low-return regions to prune or repair.")
-
     lines.append(f"Rolling window of {window} smooths short-term noise.")
     if sim_mult != 1.0:
         lines.append(("Energy down-scaling" if sim_mult < 1.0 else "Energy up-scaling") +
                      f" factor = {sim_mult:.2f}. Expect RYE to {'rise' if sim_mult < 1.0 else 'fall unless repair also improves'}.")
-
     lines.append("Next: map spikes/dips to interventions and iterate TGRM loops (detect → minimal fix → verify).")
     return " ".join(lines)
 
@@ -300,11 +341,9 @@ with tab1:
 
             # Extra charts
             with st.expander("More visuals"):
-                # Histogram of RYE
                 hist = px.histogram(pd.DataFrame({"RYE": rye}), x="RYE", nbins=30, title="RYE distribution (histogram)")
                 st.plotly_chart(hist, use_container_width=True)
 
-                # Energy vs ΔPerformance scatter (if columns exist)
                 if col_repair in df1.columns and col_energy in df1.columns:
                     dperf = _delta_performance(df1[col_repair])
                     scatter = px.scatter(
@@ -317,7 +356,6 @@ with tab1:
             section("Summary")
             st.code(json.dumps(summary, indent=2))
 
-            # Enriched export
             enriched = df1.copy()
             enriched["RYE"] = rye
             enriched[f"RYE_rolling_{window}"] = rye_roll
@@ -328,7 +366,6 @@ with tab1:
                 mime="text/csv"
             )
 
-            # Raw RYE + summary
             st.download_button(
                 "Download RYE series CSV",
                 pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8"),
@@ -364,10 +401,8 @@ with tab2:
             colC.metric("Δ Mean", f"{delta:.4f}", f"{pct:.2f}%")
             colD.metric("Resilience A / B", f"{r1:.3f} / {r2:.3f}" if r1 or r2 else "—")
 
-            # Lines
             if col_time in df1.columns and col_time in df2.columns:
-                x1 = df1[col_time]
-                x2 = df2[col_time]
+                x1 = df1[col_time]; x2 = df2[col_time]
                 fig = px.line(x=x1, y=b1["rye"], labels={"x": col_time, "y": "RYE"}, title="RYE comparison")
                 fig.add_scatter(x=x2, y=b2["rye"], mode="lines", name="B")
                 add_stability_bands(fig)
@@ -390,7 +425,6 @@ with tab2:
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # Combined export
             combined = pd.DataFrame({
                 "RYE_A": b1["rye"],
                 "RYE_B": b2["rye"],
@@ -449,14 +483,12 @@ with tab4:
             if doi_or_link.strip():
                 metadata["dataset_link"] = doi_or_link.strip()
 
-            # Attach advanced analytics if available
             for k in ("regimes", "correlation", "noise_floor", "bands"):
                 if block.get(k) is not None:
                     metadata[k] = block[k]
 
             interp = make_interpretation(summary, window, sim_factor)
 
-            # Diagnostics
             with st.expander("PDF diagnostics", expanded=False):
                 if build_pdf is None:
                     st.error("PDF builder is not loaded.")
@@ -467,7 +499,6 @@ with tab4:
                         st.write("Working directory:", os.getcwd())
                         st.write("Files:", os.listdir("."))
                         st.write("Python:", sys.version)
-                        # font presence
                         fonts_ok = os.path.exists("fonts")
                         st.write("fonts/ exists:", fonts_ok)
                         if fonts_ok:
@@ -513,6 +544,4 @@ with tab4:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
                 st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
 
-# Footer
-st.write("")
-note("Open science by Cody Ryan Jenkins. CC BY 4.0. Add your Zenodo links in the sidebar Help section.")
+# Footer (optional)
