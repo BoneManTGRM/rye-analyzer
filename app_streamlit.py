@@ -2,14 +2,14 @@
 # RYE Analyzer — CSV/TSV/XLSX support, presets, stability bands, resilience, and PDF reporting
 
 from __future__ import annotations
-import io, json
+import io, json, os, sys, traceback, importlib.util
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# Local helpers
+# ---------------- Local helpers ----------------
 from core import (
     load_table,              # reads csv/tsv/xls/xlsx
     normalize_columns,       # snake_case headers
@@ -21,11 +21,25 @@ from core import (
     # (do NOT import append_rye_columns unless it's defined in core)
 )
 
-# PDF builder (optional)
+# ---------------- PDF builder (optional) + diagnostics ----------------
+def _probe_fpdf_version() -> str:
+    try:
+        import fpdf  # fpdf2 exposes __version__
+        ver = getattr(fpdf, "__version__", "installed (version unknown)")
+        return f"fpdf module found: {ver}"
+    except Exception as e:
+        return f"fpdf import failed: {e.__class__.__name__}: {e}"
+
+build_pdf = None
+_pdf_import_error = None
 try:
-    from report import build_pdf  # returns bytes
+    spec = importlib.util.find_spec("report")
+    if spec is None:
+        _pdf_import_error = "report.py not found in the working directory."
+    else:
+        from report import build_pdf  # noqa: F401
 except Exception:
-    build_pdf = None
+    _pdf_import_error = traceback.format_exc()
 
 # ---------------- UI helpers ----------------
 def section(title: str):
@@ -89,7 +103,11 @@ with st.sidebar:
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
-    doi_or_link = st.text_input("Zenodo DOI or dataset link (optional)", value="", help="Example: 10.5281/zenodo.123456 or a dataset URL")
+    doi_or_link = st.text_input(
+        "Zenodo DOI or dataset link (optional)",
+        value="",
+        help="Example: 10.5281/zenodo.123456 or a dataset URL"
+    )
 
     st.divider()
     st.write("No data yet")
@@ -115,9 +133,8 @@ def load_any(file) -> pd.DataFrame | None:
             return None
         return df
     except Exception as e:
-        import traceback
         st.error(f"Could not read file. {e}")
-        st.text(traceback.format_exc())
+        st.code(traceback.format_exc(), language="text")
         return None
 
 def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
@@ -349,26 +366,47 @@ with tab4:
 
             interp = make_interpretation(summary, window, sim_factor)
 
+            # --- PDF diagnostics expander ---
+            with st.expander("PDF diagnostics", expanded=False):
+                if build_pdf is None:
+                    st.error("PDF builder is not loaded.")
+                    st.write(_probe_fpdf_version())
+                    if _pdf_import_error:
+                        st.code(_pdf_import_error, language="text")
+                    try:
+                        st.write("Working directory:", os.getcwd())
+                        st.write("Files:", os.listdir("."))
+                        st.write("Python:", sys.version)
+                    except Exception as e:
+                        st.write("Diag error:", e)
+                else:
+                    st.success("PDF builder loaded.")
+                    st.write(_probe_fpdf_version())
+
             colx, coly = st.columns(2)
             with colx:
                 if st.button("Generate PDF report", use_container_width=True):
                     if build_pdf is None:
                         st.error("PDF generator not available. Ensure report.py exists and **fpdf2** is in requirements.txt")
                     else:
-                        pdf_bytes = build_pdf(
-                            list(rye),
-                            summary,
-                            metadata=metadata,
-                            plot_series={"RYE": list(rye), "RYE rolling": list(rye_roll)},
-                            interpretation=interp,
-                        )
-                        st.download_button(
-                            "Download RYE report PDF",
-                            data=pdf_bytes,
-                            file_name="rye_report.pdf",
-                            mime="application/pdf",
-                            use_container_width=True,
-                        )
+                        try:
+                            pdf_bytes = build_pdf(
+                                list(rye),
+                                summary,
+                                metadata=metadata,
+                                plot_series={"RYE": list(rye), "RYE rolling": list(rye_roll)},
+                                interpretation=interp,
+                            )
+                            st.download_button(
+                                "Download RYE report PDF",
+                                data=pdf_bytes,
+                                file_name="rye_report.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                            )
+                        except Exception as e:
+                            st.error(f"PDF generation failed: {e}")
+                            st.code(traceback.format_exc(), language="text")
             with coly:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
                 st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
