@@ -34,7 +34,7 @@ def _latin1(s: str) -> str:
         "\u2192": "->",   # →
         "\u2190": "<-",   # ←
         "\u00a0": " ",    # non-breaking space
-        "\u2248": "~",    # ≈  (approx sign -> "~")
+        "\u2248": "~",    # ≈
         "\u2264": "<=",   # ≤
         "\u2265": ">=",   # ≥
     }
@@ -66,13 +66,17 @@ def _wrap(pdf: FPDF, text: str, w: float, line_h: float = 5.0) -> None:
 
 
 def _kv(pdf: FPDF, title: str, value: str, w: float) -> None:
+    # key/value pair, constrained to total width w, starting at left margin
+    pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(w * 0.35, 6, _latin1(title))
+    pdf.cell(w * 0.3, 6, _latin1(title))
     pdf.set_font("Helvetica", "", 11)
-    pdf.multi_cell(w * 0.65, 6, _latin1(value))
+    pdf.multi_cell(w * 0.7, 6, _latin1(value))
 
 
 def _section_title(pdf: FPDF, title: str, w: float) -> None:
+    # always start section titles at left margin
+    pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(w, 7, _latin1(title))
     pdf.ln(8)
@@ -156,21 +160,6 @@ def build_pdf(
 ) -> bytes:
     """
     Returns PDF bytes.
-
-    Parameters
-    ----------
-    rye_series : List[float]
-        Base RYE sequence.
-    summary : Dict
-        Output of summarize_series.
-    metadata : Optional[Dict]
-        Arbitrary metadata. Known keys (if present) are shown first:
-        rows, preset, repair_col, energy_col, time_col, domain_col, rolling_window, dataset_link,
-        regimes, correlation, noise_floor, bands, columns, etc.
-    plot_series : Optional[Dict[str, List[float]]]
-        Named series to render (e.g., {"RYE": [...], "RYE rolling k": [...]}).
-    interpretation : str
-        Human-readable interpretation to display prominently.
     """
     metadata = metadata or {}
     plot_series = plot_series or {}
@@ -179,27 +168,32 @@ def build_pdf(
     pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
 
-    # Compute printable width dynamically from margins
-    W = pdf.w - pdf.l_margin - pdf.r_margin
+    # Compute printable width dynamically from margins with a tiny safety buffer
+    W = pdf.w - pdf.l_margin - pdf.r_margin - 2
 
     # Header
+    pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "B", 18)
     pdf.cell(W, 10, _latin1("RYE Analyzer Report"), ln=1)
+    pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(W, 6, _latin1("Repair Yield per Energy - portable summary"), ln=1)
     _med_gap(pdf)
 
-    # Summary stats (grid-like listing)
+    # Summary stats (grid-like listing) — use 2 columns for more room
     _section_title(pdf, "Summary stats", W)
     pdf.set_font("Helvetica", "", 11)
     keys = ["mean", "median", "min", "max", "std", "resilience", "count", "p10", "p50", "p90", "iqr"]
-    colw = W / 3.0
+    cols_per_row = 2
+    colw = W / cols_per_row
+    pdf.set_x(pdf.l_margin)
     for i, k in enumerate(keys):
         v = _fmt_num(summary.get(k, ""))
         pdf.cell(colw, 6, _latin1(f"{k}: {v}"))
-        if (i + 1) % 3 == 0:
+        if (i + 1) % cols_per_row == 0:
             pdf.ln(6)
-    if len(keys) % 3 != 0:
+            pdf.set_x(pdf.l_margin)
+    if len(keys) % cols_per_row != 0:
         pdf.ln(6)
     _med_gap(pdf)
 
@@ -243,14 +237,13 @@ def build_pdf(
 
     # Series previews — attempt small plot, else text tables
     if plot_series:
-        # be much less aggressive so we don't waste a page
         _ensure_space(pdf, needed_mm=20)
         _section_title(pdf, "Series previews", W)
         img_bytes = _image_from_series(plot_series)
         if img_bytes:
             try:
-                # let auto_page_break handle overflow; just a small guard
                 _ensure_space(pdf, needed_mm=10)
+                pdf.set_x(pdf.l_margin)
                 pdf.image(io.BytesIO(img_bytes), w=W, type="PNG")
                 _small_gap(pdf)
             except Exception:
@@ -268,7 +261,6 @@ def build_pdf(
 
     # Base RYE sequence as last section
     if rye_series:
-        # keep this block together reasonably, but don't force a huge gap
         _ensure_space(pdf, needed_mm=25)
         _section_title(pdf, "RYE sequence", W)
         pdf.set_font("Helvetica", "", 10)
