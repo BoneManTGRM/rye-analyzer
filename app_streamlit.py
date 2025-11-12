@@ -229,18 +229,19 @@ with st.expander("What is RYE?"):
 # ---------------- Seed session_state BEFORE widgets ----------------
 _default_preset_name = list(PRESETS.keys())[0]
 _default_preset = PRESETS.get(_default_preset_name, next(iter(PRESETS.values())))
-if "col_time" not in st.session_state:
-    st.session_state["col_time"] = _first_or(
+
+if "defaults_initialized" not in st.session_state:
+    st.session_state["defaults_initialized"] = True
+    st.session_state["default_col_time"] = _first_or(
         "time", getattr(_default_preset, "time", ["time"])
     )
-if "col_domain" not in st.session_state:
-    st.session_state["col_domain"] = getattr(_default_preset, "domain", "domain") or "domain"
-if "col_repair" not in st.session_state:
-    st.session_state["col_repair"] = _first_or(
+    st.session_state["default_col_domain"] = getattr(
+        _default_preset, "domain", "domain"
+    ) or "domain"
+    st.session_state["default_col_repair"] = _first_or(
         "performance", getattr(_default_preset, "performance", ["performance"])
     )
-if "col_energy" not in st.session_state:
-    st.session_state["col_energy"] = _first_or(
+    st.session_state["default_col_energy"] = _first_or(
         "energy", getattr(_default_preset, "energy", ["energy"])
     )
 
@@ -292,20 +293,24 @@ with st.sidebar:
     st.divider()
     st.write("Column names in your data")
     col_time = st.text_input(
-        "Time column (optional)", value=st.session_state["col_time"], key="col_time"
+        "Time column (optional)",
+        value=st.session_state.get("default_col_time", "time"),
+        key="col_time",
     )
     col_domain = st.text_input(
         "Domain column (optional)",
-        value=st.session_state["col_domain"],
+        value=st.session_state.get("default_col_domain", "domain"),
         key="col_domain",
     )
     col_repair = st.text_input(
         "Performance/Repair column",
-        value=st.session_state["col_repair"],
+        value=st.session_state.get("default_col_repair", "performance"),
         key="col_repair",
     )
     col_energy = st.text_input(
-        "Energy/Effort column", value=st.session_state["col_energy"], key="col_energy"
+        "Energy/Effort column",
+        value=st.session_state.get("default_col_energy", "energy"),
+        key="col_energy",
     )
 
     if st.button("Auto-detect columns from data"):
@@ -317,21 +322,20 @@ with st.sidebar:
             try:
                 _tmp = normalize_columns(load_table(file1))
                 guess = _infer_columns(_tmp, preset_name=preset_name)
-                updates = {}
-                if guess.get("time"):
-                    updates["col_time"] = guess["time"]
-                if guess.get("domain"):
-                    updates["col_domain"] = guess["domain"]
-                if guess.get("performance"):
-                    updates["col_repair"] = guess["performance"]
-                if guess.get("energy"):
-                    updates["col_energy"] = guess["energy"]
-                if updates:
-                    st.session_state.update(updates)
                 st.success(f"Detected: {guess}")
+                # update defaults only (do not touch widget keys directly)
+                if guess.get("time"):
+                    st.session_state["default_col_time"] = guess["time"]
+                if guess.get("domain"):
+                    st.session_state["default_col_domain"] = guess["domain"]
+                if guess.get("performance"):
+                    st.session_state["default_col_repair"] = guess["performance"]
+                if guess.get("energy"):
+                    st.session_state["default_col_energy"] = guess["energy"]
                 st.rerun()
             except Exception as e:
                 st.error(f"Auto-detect failed: {e}")
+                st.code(traceback.format_exc(), language="text")
 
     st.divider()
     default_window = int(getattr(preset, "default_rolling", 10) or 10)
@@ -862,30 +866,36 @@ with tab3:
     if df1 is None:
         st.info("Upload a file to see domain splits.")
     else:
-        # robust domain column selection
-        effective_domain_col = col_domain
+        # robust domain column selection (case-insensitive + aliases)
+        lower_to_actual = {c.lower(): c for c in df1.columns}
+        effective_domain_col = None
 
-        if effective_domain_col not in df1.columns:
-            # 1) fall back to canonical 'domain' if present
-            if "domain" in df1.columns:
-                effective_domain_col = "domain"
-            else:
-                # 2) search through known domain aliases from core, if available
-                aliases = COLUMN_ALIASES.get("domain", [])
-                for cand in aliases:
-                    if cand in df1.columns:
-                        effective_domain_col = cand
-                        break
+        # 1) direct match (case-insensitive) for user-provided col_domain
+        if col_domain:
+            effective_domain_col = lower_to_actual.get(col_domain.lower())
 
-        if effective_domain_col not in df1.columns:
+        # 2) canonical 'domain'
+        if effective_domain_col is None and "domain" in df1.columns:
+            effective_domain_col = "domain"
+
+        # 3) aliases from COLUMN_ALIASES["domain"], if provided
+        if effective_domain_col is None:
+            alias_list = COLUMN_ALIASES.get("domain", [])
+            for cand in alias_list:
+                cand_actual = lower_to_actual.get(str(cand).lower())
+                if cand_actual is not None:
+                    effective_domain_col = cand_actual
+                    break
+
+        if effective_domain_col is None:
             st.info(
                 f"No suitable domain column found. Looked for '{col_domain}', 'domain', "
-                "and common alternatives like group/condition/site."
+                "and any configured aliases."
             )
+            st.write("Available columns:", list(df1.columns))
         elif ensure_columns(df1, col_repair, col_energy):
-            # update session_state if we auto-corrected the domain column name
-            if effective_domain_col != col_domain:
-                st.session_state["col_domain"] = effective_domain_col
+            # remember the effective domain col for use in reports (separate key, safe)
+            st.session_state["effective_domain_col"] = effective_domain_col
 
             b = compute_block(df1, "primary", sim_factor, auto_roll)
             dfp = b["df"].copy()
@@ -927,13 +937,20 @@ with tab4:
 
             st.write("Build a portable report to share with teams.")
 
+            domain_meta_col = ""
+            effective_dom = st.session_state.get("effective_domain_col")
+            if effective_dom and effective_dom in df1.columns:
+                domain_meta_col = effective_dom
+            elif col_domain in df1.columns:
+                domain_meta_col = col_domain
+
             metadata = {
                 "rows": len(df1),
                 "preset": preset_name,
                 "repair_col": col_repair,
                 "energy_col": col_energy,
                 "time_col": col_time if col_time in df1.columns else "",
-                "domain_col": st.session_state.get("col_domain", ""),
+                "domain_col": domain_meta_col,
                 "rolling_window": w,
                 "columns": list(df1.columns),
             }
