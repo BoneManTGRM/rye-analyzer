@@ -19,6 +19,24 @@ except Exception:
 # --------------------- Small helpers ---------------------
 def _latin1(s: str) -> str:
     """fpdf core fonts are latin-1; replace unsupported chars gracefully."""
+    if not isinstance(s, str):
+        return s
+    # First map common Unicode punctuation to ASCII so we avoid "?" in the PDF
+    replacements = {
+        "\u2014": "-",   # em dash —
+        "\u2013": "-",   # en dash –
+        "\u2212": "-",   # minus sign −
+        "\u2026": "...", # ellipsis …
+        "\u2018": "'",   # ‘
+        "\u2019": "'",   # ’
+        "\u201c": '"',   # “
+        "\u201d": '"',   # ”
+        "\u2192": "->",  # →
+        "\u2190": "<-",  # ←
+        "\u00a0": " ",   # non-breaking space
+    }
+    for k, v in replacements.items():
+        s = s.replace(k, v)
     try:
         return s.encode("latin-1", "replace").decode("latin-1")
     except Exception:
@@ -95,6 +113,18 @@ def _image_from_series(series_dict: Dict[str, List[float]], width_px: int = 1000
         except Exception:
             pass
         return None
+
+def _ensure_space(pdf: FPDF, needed_mm: float) -> None:
+    """
+    Ensure there is at least `needed_mm` of vertical space left.
+    If not, start a new page. This avoids big blank bands before large blocks.
+    """
+    # total page height
+    page_h = getattr(pdf, "h", 297)  # A4 ~297mm
+    bottom_margin = getattr(pdf, "b_margin", 12)
+    y = pdf.get_y()
+    if y + needed_mm > (page_h - bottom_margin):
+        pdf.add_page()
 
 
 # --------------------- Main builder ---------------------
@@ -193,11 +223,14 @@ def build_pdf(
 
     # Series previews — attempt small plot, else text tables
     if plot_series:
+        # ensure the plot + caption have room; if not, push to new page
+        _ensure_space(pdf, needed_mm=90)
         _section_title(pdf, "Series previews", W)
         img_bytes = _image_from_series(plot_series)
         if img_bytes:
             try:
                 # specify type so fpdf can embed from bytes
+                _ensure_space(pdf, needed_mm=80)
                 pdf.image(io.BytesIO(img_bytes), w=W, type="PNG")
                 _small_gap(pdf)
             except Exception:
@@ -215,6 +248,8 @@ def build_pdf(
 
     # Base RYE sequence as last section
     if rye_series:
+        # keep this block together reasonably
+        _ensure_space(pdf, needed_mm=60)
         _section_title(pdf, "RYE sequence", W)
         pdf.set_font("Helvetica", "", 10)
         for line in _as_rows("RYE", rye_series):
