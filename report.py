@@ -3,7 +3,7 @@
 # Drop-in replacement compatible with your app_streamlit.py.
 
 from __future__ import annotations
-import os, tempfile
+import os, io, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
@@ -11,14 +11,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
-    from fpdf import FPDF  # fpdf2 or classic fpdf
+    # Prefer fpdf2 (modern) but allow classic "fpdf" import path
+    from fpdf import FPDF
 except Exception as e:
     raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
 
 
-# -----------------------------
+# =============================
 # Font resolution (NotoSans preferred, DejaVuSans fallback)
-# -----------------------------
+# =============================
 FONT_DIR = "fonts"
 NOTO_PATH = os.path.join(FONT_DIR, "NotoSans-Regular.ttf")
 DEJAVU_PATH = os.path.join(FONT_DIR, "DejaVuSans.ttf")
@@ -34,12 +35,12 @@ def _resolve_font() -> None:
     elif os.path.exists(DEJAVU_PATH):
         UNICODE_FONT_NAME, UNICODE_FONT_PATH = "DejaVu", DEJAVU_PATH
     else:
-        UNICODE_FONT_NAME = UNICODE_FONT_PATH = None  # fall back to core fonts
+        UNICODE_FONT_NAME = UNICODE_FONT_PATH = None  # will fall back to core fonts
 
 
-# -----------------------------
+# =============================
 # Text sanitizers & helpers
-# -----------------------------
+# =============================
 _ZW = ("\u200b", "\u200e", "\u200f", "\xad")  # zero-width & soft hyphen
 
 def _strip_zero_width(s: str) -> str:
@@ -73,9 +74,9 @@ def _normalize_doi_or_url(val: str) -> Optional[str]:
     return s
 
 
-# -----------------------------
+# =============================
 # PDF shell
-# -----------------------------
+# =============================
 class Report(FPDF):
     """A4 portrait, clean margins, page numbers."""
     def __init__(self):
@@ -88,8 +89,10 @@ class Report(FPDF):
         _resolve_font()
         try:
             if UNICODE_FONT_PATH and os.path.exists(UNICODE_FONT_PATH):
-                # Register regular face; (optional) add bold later if you add a bold TTF.
+                # Register the regular face for the family
                 self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
+                # Note: if you later add a bold TTF, call:
+                # self.add_font(UNICODE_FONT_NAME, "B", PATH_TO_BOLD_TTF, uni=True)
                 self.unicode_ok = True
             self.alias_nb_pages()
         except Exception:
@@ -103,7 +106,10 @@ class Report(FPDF):
         self.set_y(-12)
         self.set_text_color(0, 0, 0)
         if self.unicode_ok:
-            self.set_font(UNICODE_FONT_NAME, "", 9)
+            try:
+                self.set_font(UNICODE_FONT_NAME, "", 9)
+            except Exception:
+                self.set_font("Helvetica", "I", 9)
         else:
             self.set_font("Helvetica", "I", 9)
         self.cell(0, 6, _sanitize(f"Page {self.page_no()}/{{nb}}", self.unicode_ok), align="R")
@@ -112,7 +118,7 @@ class Report(FPDF):
 def _font(pdf: Report, style: str = "", size: int = 11) -> None:
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
-        # We only registered the regular face; emulate bold via style if available.
+        # We only registered the regular face; emulate bold via style if available
         try:
             pdf.set_font(UNICODE_FONT_NAME, style, size)
         except Exception:
@@ -148,6 +154,7 @@ def _hyperlink(pdf: Report, label: str, url: Optional[str]) -> None:
         pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L")
         return
     pdf.set_text_color(0, 0, 200)
+    # underline if possible
     if pdf.unicode_ok:
         try:
             pdf.set_font(UNICODE_FONT_NAME, "U", 11)
@@ -170,9 +177,9 @@ def _key_val_rows(rows: List[Tuple[str, Union[str, float, int]]], key_w: float, 
     return render
 
 
-# -----------------------------
+# =============================
 # Small plots into the PDF
-# -----------------------------
+# =============================
 def _add_series_plot(pdf: Report,
                      series_dict: Dict[str, Sequence[float]],
                      title: str = "Repair Yield per Energy") -> None:
@@ -201,9 +208,9 @@ def _add_series_plot(pdf: Report,
             pass
 
 
-# -----------------------------
+# =============================
 # Main builder
-# -----------------------------
+# =============================
 def build_pdf(
     rye: Iterable[float],
     summary: Dict[str, Union[float, int, str]],
@@ -244,6 +251,7 @@ def build_pdf(
     _h2(pdf, "Dataset metadata")
     key_w = 42
     val_w = pdf.content_w - key_w
+    # Link first (if any)
     raw_link = str(metadata.get("dataset_link", "") or "").strip()
     if raw_link:
         url = _normalize_doi_or_url(raw_link)
@@ -260,7 +268,7 @@ def build_pdf(
         _key_val_rows(rows, key_w=key_w, val_w=val_w)(pdf)
     pdf.ln(2)
 
-    # Summary statistics
+    # Summary statistics (whatever you passed in, e.g., mean/median/resilience)
     _h2(pdf, "Summary statistics")
     sum_rows = [(str(k), _fmt_num(v)) for k, v in summary.items()]
     _key_val_rows(sum_rows, key_w=key_w, val_w=val_w)(pdf)
@@ -393,5 +401,4 @@ def build_pdf(
     out = pdf.output(dest="S")
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
-    # classic fpdf: returns str -> encode safely
     return str(out).encode("latin-1", "ignore")
