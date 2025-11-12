@@ -1,5 +1,5 @@
 # report.py
-# Build a compact, multi-page PDF report for RYE analyses.
+# Build a compact, multi-page PDF report for RYE analyses (Unicode-safe).
 
 from __future__ import annotations
 import io, os, tempfile
@@ -16,6 +16,24 @@ except Exception as e:
 
 
 # -----------------------------
+# Unicode handling
+# -----------------------------
+# If this TTF exists, we’ll use it for full UTF-8 support (accents, emoji, etc.)
+UNICODE_FONT_PATH = "fonts/DejaVuSans.ttf"
+UNICODE_FONT_NAME = "DejaVu"
+
+def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
+    """
+    Convert any value to str. If we don't have a Unicode font loaded,
+    replace characters outside Latin-1 so classic Helvetica won't crash.
+    """
+    s = str(txt)
+    if unicode_ok:
+        return s
+    return s.encode("latin-1", "replace").decode("latin-1")
+
+
+# -----------------------------
 # PDF helpers
 # -----------------------------
 
@@ -26,16 +44,26 @@ class Report(FPDF):
         self.set_margins(12, 12, 12)
         self.set_auto_page_break(auto=True, margin=15)
         self.set_text_color(0, 0, 0)
+
+        self.unicode_ok = False
         try:
+            # Try to use a real Unicode font if provided
+            if os.path.exists(UNICODE_FONT_PATH):
+                self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
+                self.unicode_ok = True
             self.alias_nb_pages()
         except Exception:
-            pass
+            # If anything fails, we’ll just run with core fonts + sanitization
+            self.unicode_ok = False
 
     def footer(self):
         self.set_y(-12)
         self.set_text_color(0, 0, 0)
-        self.set_font("Helvetica", "I", 9)
-        self.cell(0, 6, f"Page {self.page_no()}/{{nb}}", align="R")
+        if self.unicode_ok:
+            self.set_font(UNICODE_FONT_NAME, "", 9)
+        else:
+            self.set_font("Helvetica", "I", 9)
+        self.cell(0, 6, _sanitize(f"Page {self.page_no()}/{{nb}}", self.unicode_ok), align="R")
 
     @property
     def content_w(self) -> float:
@@ -43,19 +71,22 @@ class Report(FPDF):
 
 
 def _font(pdf: Report, style: str = "", size: int = 11):
-    """Always use a core font and reset text color to black."""
+    """Use Unicode font if available; otherwise Helvetica. Always reset text color to black."""
     pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Helvetica", style, size)
+    if pdf.unicode_ok:
+        pdf.set_font(UNICODE_FONT_NAME, style, size)
+    else:
+        pdf.set_font("Helvetica", style, size)
 
 
 def _h1(pdf: Report, text: str):
     _font(pdf, "B", 18)
-    pdf.cell(0, 10, text, ln=1)
+    pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
 
 
 def _h2(pdf: Report, text: str):
     _font(pdf, "B", 13)
-    pdf.cell(0, 8, text, ln=1)
+    pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
 
 
 def _body(pdf: Report, size: int = 11):
@@ -82,9 +113,9 @@ def _key_val_rows(
     def render(pdf: Report):
         for k, v in data:
             _font(pdf, "B", 11)
-            pdf.cell(key_w, 6, str(k), align="L")
+            pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
             _body(pdf, 11)
-            pdf.multi_cell(val_w, 6, str(v), align="L")
+            pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
     return render
 
 
@@ -148,7 +179,7 @@ def build_pdf(
     generated = metadata.get("generated") or metadata.get("timestamp") or ""
     _body(pdf, 10)
     if generated:
-        pdf.cell(0, 6, f"Generated: {generated}", ln=1)
+        pdf.cell(0, 6, _sanitize(f"Generated: {generated}", pdf.unicode_ok), ln=1)
     pdf.ln(2)
 
     # Dataset metadata
@@ -157,7 +188,7 @@ def build_pdf(
     for k, v in metadata.items():
         if k in ("generated", "timestamp"):
             continue
-        meta_rows.append((k, f"{v:.3f}" if isinstance(v, float) else v))
+        meta_rows.append((str(k), f"{v:.3f}" if isinstance(v, float) else v))
     _key_val_rows(meta_rows, key_w=35, val_w=pdf.content_w - 35)(pdf)
     pdf.ln(2)
 
@@ -165,7 +196,7 @@ def build_pdf(
     _h2(pdf, "Summary statistics")
     items: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in summary.items():
-        items.append((k, f"{v:.3f}" if isinstance(v, float) else v))
+        items.append((str(k), f"{v:.3f}" if isinstance(v, float) else v))
     _key_val_rows(items, key_w=35, val_w=pdf.content_w - 35)(pdf)
     pdf.ln(2)
 
@@ -186,15 +217,15 @@ def build_pdf(
         ltxt = left[idx] if idx < len(left) else ""
         rtxt = right[idx] if idx < len(right) else ""
         y0 = pdf.get_y(); x0 = pdf.get_x()
-        pdf.multi_cell(col_w, 6, ltxt, align="L")
+        pdf.multi_cell(col_w, 6, _sanitize(ltxt, pdf.unicode_ok), align="L")
         h_left = pdf.get_y() - y0
         pdf.set_xy(x0 + col_w + 5, y0)
-        pdf.multi_cell(col_w, 6, rtxt, align="L")
+        pdf.multi_cell(col_w, 6, _sanitize(rtxt, pdf.unicode_ok), align="L")
         h_right = pdf.get_y() - y0
         pdf.set_y(y0 + max(h_left, h_right))
     pdf.ln(2)
 
-    # Interpretation (ASCII-safe arrow)
+    # Interpretation
     if not interpretation:
         mean = float(summary.get("mean", 0.0) or 0.0)
         minv = float(summary.get("min", 0.0) or 0.0)
@@ -209,22 +240,25 @@ def build_pdf(
         )
     _h2(pdf, "Interpretation")
     _body(pdf, 11)
-    pdf.multi_cell(0, 6, interpretation, align="L")
+    pdf.multi_cell(0, 6, _sanitize(interpretation, pdf.unicode_ok), align="L")
     pdf.ln(4)
 
     # Footer note
-    _body(pdf, 10); pdf.cell(0, 6, "RYE.", ln=1)
+    _body(pdf, 10); pdf.cell(0, 6, _sanitize("RYE.", pdf.unicode_ok), ln=1)
     _body(pdf, 9)
     pdf.multi_cell(
         0, 5,
-        "Open science by Cody Ryan Jenkins (CC BY 4.0). "
-        "Learn more: Reparodynamics   RYE (Repair Yield per Energy)   TGRM.",
+        _sanitize(
+            "Open science by Cody Ryan Jenkins (CC BY 4.0). "
+            "Learn more: Reparodynamics   RYE (Repair Yield per Energy)   TGRM.",
+            pdf.unicode_ok
+        ),
         align="L"
     )
 
-    # Return exact bytes. For fpdf2, this is already bytes.
+    # Return exact bytes. For fpdf2 this is already bytes; classic fpdf returns latin-1 str.
     out = pdf.output(dest="S")
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
-    # Classic fpdf returns a Latin-1 string representing the PDF bytes.
+    # Safe fallback: encode whatever we got
     return str(out).encode("latin-1", errors="replace")
