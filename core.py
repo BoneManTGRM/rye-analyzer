@@ -121,7 +121,7 @@ except Exception:
         ),
         "Marine Biology": Preset(
             "Marine Biology",
-            time=_kw("time", "t", "date", "day", "doy", "timestamp", "sample_time"),
+            time=_kw("time", "t", "date", "day", "doy", "timestamp", "sample_time", "year", "season"),
             performance=_kw(
                 "performance",
                 "survival",
@@ -136,6 +136,13 @@ except Exception:
                 "diversity",
                 "shannon",
                 "richness",
+                # synthetic examples / common marine metrics
+                "avg_live_coral_cover_pct",
+                "net_primary_prod_mg_c_m2_day",
+                "predator_biomass_kg",
+                "herbivore_biomass_kg",
+                "aragonite_saturation_state",
+                "gross_primary_prod_g_c_m2_day",
             ),
             energy=_kw(
                 "energy",
@@ -153,14 +160,23 @@ except Exception:
                 "pco2",
                 "salinity",
                 "stress",
+                # synthetic marine-energy proxies
+                "survey_effort_hours",
+                "chlorophyll_mg_m3",
+                "survey_minutes",
+                "dissolved_inorganic_carbon_umol_kg",
+                "ecosystem_respiration_g_c_m2_day",
             ),
             domain="domain",
             default_rolling=10,
-            tooltips={"chl": "Chlorophyll a proxy", "par": "Photosynthetically active radiation"},
+            tooltips={
+                "chl": "Chlorophyll a proxy",
+                "par": "Photosynthetically active radiation",
+            },
         ),
         "Fisheries": Preset(
             "Fisheries",
-            time=_kw("time", "t", "date", "trip", "haul", "set", "tow"),
+            time=_kw("time", "t", "date", "trip", "haul", "set", "tow", "year"),
             performance=_kw(
                 "performance",
                 "cpue",
@@ -169,6 +185,8 @@ except Exception:
                 "catch_rate",
                 "survival",
                 "recruitment",
+                "predator_biomass_kg",
+                "herbivore_biomass_kg",
             ),
             energy=_kw(
                 "energy",
@@ -178,13 +196,14 @@ except Exception:
                 "trawl_hours",
                 "fuel",
                 "cost",
+                "survey_minutes",
             ),
             domain="domain",
             default_rolling=10,
         ),
         "Coral Reef Monitoring": Preset(
             "Coral Reef Monitoring",
-            time=_kw("time", "t", "date", "survey", "dive"),
+            time=_kw("time", "t", "date", "survey", "dive", "year"),
             performance=_kw(
                 "performance",
                 "live_coral_cover",
@@ -192,6 +211,7 @@ except Exception:
                 "calcification",
                 "photosynthesis",
                 "recovery",
+                "avg_live_coral_cover_pct",
             ),
             energy=_kw(
                 "energy",
@@ -201,6 +221,7 @@ except Exception:
                 "effort",
                 "par",
                 "dose",
+                "survey_effort_hours",
             ),
             domain="domain",
             default_rolling=10,
@@ -217,6 +238,7 @@ except Exception:
                 "oxygen",
                 "chlorophyll",
                 "fluorescence",
+                "aragonite_saturation_state",
             ),
             energy=_kw(
                 "energy",
@@ -226,6 +248,7 @@ except Exception:
                 "cost",
                 "cast_depth",
                 "niskin_trips",
+                "dissolved_inorganic_carbon_umol_kg",
             ),
             domain="domain",
             default_rolling=10,
@@ -333,6 +356,8 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "week",
         "campaign_day",
         "cohort_day",
+        "year",
+        "season",
     ],
     "performance": [
         "performance",
@@ -377,6 +402,13 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "health_score",
         "soh",
         "capacity_retained",
+        # marine CSV examples
+        "avg_live_coral_cover_pct",
+        "net_primary_prod_mg_c_m2_day",
+        "predator_biomass_kg",
+        "herbivore_biomass_kg",
+        "aragonite_saturation_state",
+        "gross_primary_prod_g_c_m2_day",
         # marketing / web
         "ctr",
         "click_through_rate",
@@ -436,6 +468,12 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "cpu_load",
         "torque_int",
         "battery_used",
+        # marine CSV examples
+        "survey_effort_hours",
+        "chlorophyll_mg_m3",
+        "survey_minutes",
+        "dissolved_inorganic_carbon_umol_kg",
+        "ecosystem_respiration_g_c_m2_day",
         # marketing / business
         "spend",
         "ad_spend",
@@ -648,11 +686,11 @@ def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[s
         t = [
             c
             for c in cols
-            if any(k in c.lower() for k in ("time", "date", "epoch", "step", "iteration"))
+            if any(k in c.lower() for k in ("time", "date", "epoch", "step", "iteration", "year", "season"))
         ]
         out["time"] = t[0] if t else None
     if out["domain"] is None:
-        d = [c for c in cols if c.lower() in COLUMN_ALIASES["domain"]]
+        d = [c for c in cols if c.lower() in COLUMN_ALIASES["domain"] or any(a in c.lower() for a in COLUMN_ALIASES["domain"])]
         out["domain"] = d[0] if d else None
 
     return out
