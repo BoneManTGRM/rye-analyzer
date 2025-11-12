@@ -4,7 +4,7 @@
 # Single / Compare / Multi-domain / Reports tabs • Diagnostics & PDF reporting
 
 from __future__ import annotations
-import io, json, os, sys, traceback, importlib.util
+import io, json, os, sys, traceback, importlib.util, importlib.machinery
 from typing import Optional, Dict, Any
 
 import numpy as np
@@ -12,6 +12,55 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+# ------------- Make sure we can see core.py regardless of folder layout -------------
+ROOT = os.path.dirname(os.path.abspath(__file__))
+CANDIDATE_PATHS = [
+    ROOT,
+    os.path.join(ROOT, "src"),
+    os.path.join(ROOT, "app"),
+    os.path.join(ROOT, "rye_analyzer"),
+    os.path.join(ROOT, "rye-analyzer"),
+]
+for p in CANDIDATE_PATHS:
+    if p not in sys.path and os.path.isdir(p):
+        sys.path.insert(0, p)
+
+def _try_import_core():
+    # 1) normal import
+    try:
+        import core  # type: ignore
+        return core
+    except Exception:
+        pass
+    # 2) package-style (if running inside a pkg)
+    try:
+        from . import core  # type: ignore
+        return core
+    except Exception:
+        pass
+    # 3) direct load from file if it exists nearby
+    for base in CANDIDATE_PATHS:
+        fp = os.path.join(base, "core.py")
+        if os.path.isfile(fp):
+            try:
+                loader = importlib.machinery.SourceFileLoader("core", fp)
+                mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("core", loader))
+                loader.exec_module(mod)  # type: ignore
+                sys.modules["core"] = mod
+                return mod
+            except Exception:
+                pass
+    return None
+
+_core_mod = _try_import_core()
+if _core_mod is None:
+    st.set_page_config(page_title="RYE Analyzer", page_icon="📈", layout="wide")
+    st.error(
+        "Could not import **core.py**. Ensure a file named `core.py` is in the same folder "
+        "as this app or in one of: `src/`, `app/`, `rye_analyzer/`, `rye-analyzer/`."
+    )
+    st.stop()
 
 # ---------------- Try to import PRESETS ----------------
 PRESETS = None
@@ -21,8 +70,7 @@ try:
     PRESETS = _PRESETS
 except Exception as e1:
     try:
-        from core import PRESETS as _PRESETS  # fallback if kept in core.py
-        PRESETS = _PRESETS
+        PRESETS = _core_mod.PRESETS  # fallback if kept in core.py
     except Exception as e2:
         preset_import_error = (
             "Could not import PRESETS (presets.py/core.py). Using a tiny default. "
@@ -41,34 +89,34 @@ except Exception as e1:
         }
 
 # ---------------- Import core helpers (with graceful fallbacks) ----------------
-from core import load_table, normalize_columns, safe_float
+load_table = _core_mod.load_table
+normalize_columns = _core_mod.normalize_columns
+safe_float = _core_mod.safe_float
 
 # compute_rye_from_df may be named differently in older cores; alias whichever exists
-try:
-    from core import compute_rye_from_df as _compute_rye_from_df
-except Exception:
-    try:
-        from core import compute_rye as _compute_rye_from_df  # older name
-    except Exception as e:
-        raise ImportError(
-            "Neither compute_rye_from_df nor compute_rye found in core.py — add one of them."
-        ) from e
+if hasattr(_core_mod, "compute_rye_from_df"):
+    _compute_rye_from_df = _core_mod.compute_rye_from_df
+elif hasattr(_core_mod, "compute_rye"):
+    _compute_rye_from_df = _core_mod.compute_rye
+else:
+    st.set_page_config(page_title="RYE Analyzer", page_icon="📈", layout="wide")
+    st.error("Neither `compute_rye_from_df` nor `compute_rye` found in core.py — add one of them.")
+    st.stop()
 
 # summarize function may be named summarize_series or summarize
-try:
-    from core import summarize_series as _summarize_series
-except Exception:
-    try:
-        from core import summarize as _summarize_series
-    except Exception as e:
-        raise ImportError(
-            "Neither summarize_series nor summarize found in core.py — add one of them."
-        ) from e
+if hasattr(_core_mod, "summarize_series"):
+    _summarize_series = _core_mod.summarize_series
+elif hasattr(_core_mod, "summarize"):
+    _summarize_series = _core_mod.summarize
+else:
+    st.set_page_config(page_title="RYE Analyzer", page_icon="📈", layout="wide")
+    st.error("Neither `summarize_series` nor `summarize` found in core.py — add one of them.")
+    st.stop()
 
 # rolling_series is optional; provide a pandas fallback if missing
-try:
-    from core import rolling_series as _rolling_series
-except Exception:
+if hasattr(_core_mod, "rolling_series"):
+    _rolling_series = _core_mod.rolling_series
+else:
     def _rolling_series(arr, window: int):
         s = pd.Series(arr, dtype=float)
         if window <= 1:
@@ -76,31 +124,13 @@ except Exception:
         return s.rolling(window=window, min_periods=1).mean().values
 
 # optional column inference
-try:
-    from core import infer_columns as _infer_columns
-except Exception:
-    _infer_columns = None
+_infer_columns = getattr(_core_mod, "infer_columns", None)
 
 # Optional advanced analytics (each may be absent)
-try:
-    from core import detect_regimes
-except Exception:
-    detect_regimes = None
-
-try:
-    from core import energy_delta_performance_correlation
-except Exception:
-    energy_delta_performance_correlation = None
-
-try:
-    from core import estimate_noise_floor
-except Exception:
-    estimate_noise_floor = None
-
-try:
-    from core import bootstrap_rolling_mean
-except Exception:
-    bootstrap_rolling_mean = None
+detect_regimes = getattr(_core_mod, "detect_regimes", None)
+energy_delta_performance_correlation = getattr(_core_mod, "energy_delta_performance_correlation", None)
+estimate_noise_floor = getattr(_core_mod, "estimate_noise_floor", None)
+bootstrap_rolling_mean = getattr(_core_mod, "bootstrap_rolling_mean", None)
 
 # ---------------- Local helpers (work even if core lacks them) ----------------
 def ema_series(x, span: int) -> np.ndarray:
@@ -157,7 +187,6 @@ def _delta_performance(series):
 def _first_or(default, lst):
     return (lst[0] if isinstance(lst, list) and lst else default)
 
-# Robust popover fallback for older Streamlit versions
 _HAS_POPOVER = hasattr(st, "popover")
 
 # ---------------- Page config ----------------
@@ -177,7 +206,6 @@ with st.sidebar:
     preset_name = st.selectbox("Preset", list(PRESETS.keys()), index=0)
     preset = PRESETS.get(preset_name, next(iter(PRESETS.values())))
 
-    # Optional tooltips per preset
     ttips = getattr(preset, "tooltips", None) or {}
     if isinstance(ttips, dict) and ttips:
         if _HAS_POPOVER:
@@ -201,7 +229,6 @@ with st.sidebar:
     col_repair = st.text_input("Performance/Repair column", value=_first_or("performance", getattr(preset, "performance", ["performance"])), key="col_repair")
     col_energy = st.text_input("Energy/Effort column",     value=_first_or("energy",     getattr(preset, "energy", ["energy"])), key="col_energy")
 
-    # Auto-detect button (fills the inputs using core.infer_columns if available)
     if st.button("Auto-detect columns from data"):
         if _infer_columns is None:
             st.warning("Column inference not available (core.infer_columns missing).")
@@ -562,8 +589,7 @@ with tab3:
             else:
                 fig = px.line(dfp, y="RYE", color=col_domain, title="RYE by domain")
             add_stability_bands(fig)
-            st.plotly_chart(fig, use_container_width=True)
-
+            st.plotly_chart(fig)
 # ---------- Tab 4 ----------
 with tab4:
     if df1 is None:
