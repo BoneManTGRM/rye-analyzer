@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 import io, json, os, sys, traceback, importlib.util
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -114,7 +114,7 @@ def cumulative_series(x) -> np.ndarray:
     a[~np.isfinite(a)] = 0.0
     return np.cumsum(a)
 
-def smart_window(n_rows: int, preset_default: int | None) -> int:
+def smart_window(n_rows: int, preset_default: Optional[int]) -> int:
     if preset_default and preset_default > 0:
         return int(preset_default)
     if n_rows <= 0:
@@ -144,7 +144,7 @@ except Exception:
     _pdf_import_error = traceback.format_exc()
 
 # ---------------- UI helpers ----------------
-def add_stability_bands(fig: go.Figure, y_max_hint: float | None = None):
+def add_stability_bands(fig: go.Figure, y_max_hint: Optional[float] = None):
     top = y_max_hint if y_max_hint is not None else 1.0
     fig.add_hrect(y0=0.6, y1=max(0.6, top), fillcolor="green", opacity=0.08, line_width=0)
     fig.add_hrect(y0=0.3, y1=0.6,             fillcolor="yellow", opacity=0.08, line_width=0)
@@ -153,6 +153,12 @@ def add_stability_bands(fig: go.Figure, y_max_hint: float | None = None):
 def _delta_performance(series):
     arr = pd.Series(series, dtype=float)
     return arr.diff().fillna(0.0).values
+
+def _first_or(default, lst):
+    return (lst[0] if isinstance(lst, list) and lst else default)
+
+# Robust popover fallback for older Streamlit versions
+_HAS_POPOVER = hasattr(st, "popover")
 
 # ---------------- Page config ----------------
 st.set_page_config(page_title="RYE Analyzer", page_icon="📈", layout="wide")
@@ -174,9 +180,14 @@ with st.sidebar:
     # Optional tooltips per preset
     ttips = getattr(preset, "tooltips", None) or {}
     if isinstance(ttips, dict) and ttips:
-        with st.popover("Preset tips", use_container_width=True):
-            for k, v in ttips.items():
-                st.markdown(f"**{k}** — {v}")
+        if _HAS_POPOVER:
+            with st.popover("Preset tips", use_container_width=True):
+                for k, v in ttips.items():
+                    st.markdown(f"**{k}** — {v}")
+        else:
+            with st.expander("Preset tips"):
+                for k, v in ttips.items():
+                    st.markdown(f"**{k}** — {v}")
 
     st.write("Upload one file to analyze. Optionally upload a second file to compare.")
     file_types = ["csv", "tsv", "xls", "xlsx", "parquet", "feather", "json", "ndjson", "h5", "hdf5", "nc", "netcdf"]
@@ -185,7 +196,6 @@ with st.sidebar:
 
     st.divider()
     st.write("Column names in your data")
-    def _first_or(default, lst): return (lst[0] if isinstance(lst, list) and lst else default)
     col_time   = st.text_input("Time column (optional)", value=_first_or("time", getattr(preset, "time", ["time"])), key="col_time")
     col_domain = st.text_input("Domain column (optional)", value=getattr(preset, "domain", "domain") or "domain", key="col_domain")
     col_repair = st.text_input("Performance/Repair column", value=_first_or("performance", getattr(preset, "performance", ["performance"])), key="col_repair")
@@ -201,10 +211,10 @@ with st.sidebar:
             try:
                 _tmp = normalize_columns(load_table(file1))
                 guess = _infer_columns(_tmp, preset_name=preset_name)
-                if guess.get("time"):   st.session_state["col_time"] = guess["time"]
-                if guess.get("domain"): st.session_state["col_domain"] = guess["domain"]
-                if guess.get("performance"): st.session_state["col_repair"] = guess["performance"]
-                if guess.get("energy"):      st.session_state["col_energy"] = guess["energy"]
+                if guess.get("time"):         st.session_state["col_time"] = guess["time"]
+                if guess.get("domain"):       st.session_state["col_domain"] = guess["domain"]
+                if guess.get("performance"):  st.session_state["col_repair"] = guess["performance"]
+                if guess.get("energy"):       st.session_state["col_energy"]  = guess["energy"]
                 st.success(f"Detected: {guess}")
                 st.rerun()
             except Exception as e:
@@ -242,7 +252,7 @@ with st.sidebar:
         st.download_button("Save example.csv", b, file_name="example.csv", mime="text/csv")
 
 # ---------------- Core workers ----------------
-def load_any(file) -> pd.DataFrame | None:
+def load_any(file) -> Optional[pd.DataFrame]:
     if file is None:
         return None
     try:
@@ -265,10 +275,12 @@ def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
         return False
     return True
 
-def compute_block(df: pd.DataFrame, label: str, sim_mult: float, auto_roll_flag: bool) -> dict:
+def compute_block(df: pd.DataFrame, label: str, sim_mult: float, auto_roll_flag: bool) -> Dict[str, Any]:
     df_sim = df.copy()
     if col_energy in df_sim.columns:
-        df_sim[col_energy] = pd.to_numeric(df_sim[col_energy], errors="coerce").apply(lambda x: safe_float(x) * sim_mult)
+        df_sim[col_energy] = pd.to_numeric(df_sim[col_energy], errors="coerce").apply(
+            lambda x: safe_float(x) * sim_mult
+        )
 
     rye = _compute_rye_from_df(df_sim, repair_col=col_repair, energy_col=col_energy)
 
@@ -284,7 +296,7 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float, auto_roll_flag:
     summary = _summarize_series(rye)
     summary_roll = _summarize_series(rye_roll)
 
-    out = {
+    out: Dict[str, Any] = {
         "label": label,
         "df": df_sim,
         "w": w,
@@ -445,10 +457,7 @@ with tab1:
                         pass
 
             st.divider()
-            section_text = (
-                "Summary"
-            )
-            st.subheader(section_text)
+            st.subheader("Summary")
             st.code(json.dumps(summary, indent=2))
 
             enriched = df1.copy()
