@@ -19,43 +19,26 @@ except Exception as e:
 # Font handling (NotoSans preferred, DejaVu fallback)
 # -----------------------------
 FONT_DIR = "fonts"
-NOTO_PATH = os.path.join(FONT_DIR, "NotoSans-Regular.ttf")
-DEJAVU_PATH = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+# Support both root and fonts/ locations
+ROOT_NOTO = "NotoSans-Regular.ttf"
+ROOT_DEJA = "DejaVuSans.ttf"
+NOTO_PATH = os.path.join(FONT_DIR, ROOT_NOTO)
+DEJAVU_PATH = os.path.join(FONT_DIR, ROOT_DEJA)
 
-UNICODE_FONT_PATH = None
-UNICODE_FONT_NAME = None  # set after resolution
+UNICODE_FONT_PATH: Optional[str] = None
+UNICODE_FONT_NAME: Optional[str] = None  # set after resolution
 
 def _pick_local_font() -> Optional[Tuple[str, str]]:
-    """Return (font_name, font_path) if a local TTF exists."""
-    if os.path.exists(NOTO_PATH):
-        return ("NotoSans", NOTO_PATH)
-    if os.path.exists(DEJAVU_PATH):
-        return ("DejaVu", DEJAVU_PATH)
-    return None
-
-def _try_fetch_font() -> Optional[Tuple[str, str]]:
-    """Try to download a font into fonts/. Returns (name, path) or None."""
-    try:
-        import requests
-    except Exception:
-        return None
-
-    os.makedirs(FONT_DIR, exist_ok=True)
-    # Try DejaVu first (smaller), then Noto as backup
-    candidates = [
-        ("DejaVu", "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf", DEJAVU_PATH),
-        ("DejaVu", "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@master/ttf/DejaVuSans.ttf", DEJAVU_PATH),
-        ("NotoSans", "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf", NOTO_PATH),
-    ]
-    for name, url, path in candidates:
-        try:
-            r = requests.get(url, timeout=10)
-            if r.ok and len(r.content) > 100_000:
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                return (name, path)
-        except Exception:
-            continue
+    """Return (font_name, font_path) if a local TTF exists (root or fonts/)."""
+    # Prefer NotoSans
+    for name, path in [
+        ("NotoSans", NOTO_PATH),
+        ("NotoSans", ROOT_NOTO),
+        ("DejaVu", DEJAVU_PATH),
+        ("DejaVu", ROOT_DEJA),
+    ]:
+        if os.path.exists(path):
+            return (name, path)
     return None
 
 def _resolve_font():
@@ -64,24 +47,28 @@ def _resolve_font():
     local = _pick_local_font()
     if local:
         UNICODE_FONT_NAME, UNICODE_FONT_PATH = local
-        return
-    fetched = _try_fetch_font()
-    if fetched:
-        UNICODE_FONT_NAME, UNICODE_FONT_PATH = fetched
 
 # -----------------------------
 # Text utilities
 # -----------------------------
 def _strip_zero_width(s: str) -> str:
-    # Remove zero-width and soft hyphen characters that can trip core fonts
-    return s.replace("\u200b", "").replace("\u200e", "").replace("\u200f", "").replace("\xad", "")
+    # Remove zero-width and soft-hyphen characters that can trip encoders
+    return (
+        s.replace("\u200b", "")
+         .replace("\u200e", "")
+         .replace("\u200f", "")
+         .replace("\xad", "")
+    )
 
 def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
     """
     Convert to string; if Unicode font is unavailable, coerce to Latin-1-safe.
     Also strips zero-width characters.
     """
-    s = str(txt) if not isinstance(txt, float) else f"{txt:.3f}"
+    if isinstance(txt, float):
+        s = f"{txt:.3f}"
+    else:
+        s = str(txt)
     s = _strip_zero_width(s)
     if unicode_ok:
         return s
@@ -186,7 +173,11 @@ def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]], key_w: float, 
             _font(pdf, "B", 11)
             pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
             _body(pdf, 11)
+            # Ensure we start the value exactly after the key cell
+            x0 = pdf.get_x(); y0 = pdf.get_y()
             pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
+            # After multi_cell, cursor is at line start; restore left indent for next row
+            pdf.set_x(x0 - key_w)
     return render
 
 # -----------------------------
@@ -333,4 +324,8 @@ def build_pdf(
         align="L"
     )
 
-    return bytes(pdf.output(dest="S").encode("latin-1"))
+    # --- return bytes (fpdf v1 vs v2 compatibility) ---
+    out = pdf.output(dest="S")
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)            # fpdf2 returns bytearray
+    return out.encode("latin-1")     # old fpdf returns str
