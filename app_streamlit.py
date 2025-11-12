@@ -1,5 +1,5 @@
 # app_streamlit.py
-# RYE Analyzer full app with CSV/TSV/XLSX support, presets, stability bands, resilience, and PDF reporting
+# RYE Analyzer — CSV/TSV/XLSX support, presets, stability bands, resilience, and PDF reporting
 
 from __future__ import annotations
 import io, json
@@ -17,10 +17,11 @@ from core import (
     compute_rye_from_df,
     rolling_series,
     safe_float,
-    summarize_series,        # now includes "resilience"
-    append_rye_columns,      # adds RYE_step / RYE_cum (for future use) — optional
+    summarize_series,        # may include "resilience" if you added it in core
+    # (do NOT import append_rye_columns unless it's defined in core)
 )
 
+# PDF builder (optional)
 try:
     from report import build_pdf  # returns bytes
 except Exception:
@@ -34,12 +35,13 @@ def note(msg: str):
     st.caption(msg)
 
 def add_stability_bands(fig: go.Figure, y_max_hint: float | None = None):
-    # Visual efficiency zones (soft overlays)
-    # Green: >= 0.6, Yellow: 0.3–0.6, Red: < 0.3
-    # Use generous y extents so bands are visible regardless of data range
+    """Soft overlays for quick visual interpretation."""
     top = y_max_hint if y_max_hint is not None else 1.0
+    # green >= 0.6
     fig.add_hrect(y0=0.6, y1=max(0.6, top), fillcolor="green", opacity=0.08, line_width=0)
-    fig.add_hrect(y0=0.3, y1=0.6,             fillcolor="yellow", opacity=0.08, line_width=0)
+    # yellow 0.3–0.6
+    fig.add_hrect(y0=0.3, y1=0.6, fillcolor="yellow", opacity=0.08, line_width=0)
+    # red < 0.3 (extend a bit below 0 to ensure visibility)
     fig.add_hrect(y0=min(-0.5, 0.3 - 1.0), y1=0.3, fillcolor="red", opacity=0.08, line_width=0)
 
 # ---------------- Page config ----------------
@@ -58,9 +60,15 @@ with st.expander("What is RYE"):
 with st.sidebar:
     st.header("Inputs")
 
-    # Preset labels for copy only, internal column names can stay the same
     preset_name = st.selectbox("Preset", ["AI", "Biology", "Robotics"], index=1)
-    preset = PRESETS[preset_name]
+    preset = PRESETS.get(preset_name, PRESETS[list(PRESETS.keys())[0]])
+
+    # Optional tiny helper text from the preset tooltips
+    ttips = preset.get("tooltips", {})
+    if ttips:
+        with st.popover("Preset tips", use_container_width=True):
+            for k, v in ttips.items():
+                st.markdown(f"**{k}** — {v}")
 
     st.write("Upload one file to analyze. Optionally upload a second file to compare.")
     file1 = st.file_uploader("Primary file", type=["csv", "tsv", "xls", "xlsx"], key="csv1")
@@ -81,7 +89,7 @@ with st.sidebar:
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
-    doi_or_link = st.text_input("Zenodo DOI or dataset link (optional)", value="")
+    doi_or_link = st.text_input("Zenodo DOI or dataset link (optional)", value="", help="Example: 10.5281/zenodo.123456 or a dataset URL")
 
     st.divider()
     st.write("No data yet")
@@ -102,6 +110,9 @@ def load_any(file) -> pd.DataFrame | None:
     try:
         df = load_table(file)          # supports csv/tsv/xls/xlsx
         df = normalize_columns(df)     # snake_case headers
+        if df.empty:
+            st.error("The file was read successfully, but it contains no rows.")
+            return None
         return df
     except Exception as e:
         import traceback
@@ -120,12 +131,15 @@ def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
 def compute_block(df: pd.DataFrame, label: str, sim_mult: float) -> dict:
     df_sim = df.copy()
     if col_energy in df_sim.columns:
-        df_sim[col_energy] = df_sim[col_energy].apply(lambda x: safe_float(x) * sim_mult)
+        # robust multiply, coerces to float
+        df_sim[col_energy] = pd.to_numeric(df_sim[col_energy], errors="coerce").apply(
+            lambda x: safe_float(x) * sim_mult
+        )
 
     rye = compute_rye_from_df(df_sim, repair_col=col_repair, energy_col=col_energy)
     rye_roll = rolling_series(rye, window)
 
-    summary = summarize_series(rye)          # includes "resilience"
+    summary = summarize_series(rye)          # may include "resilience" if you added it in core
     summary_roll = summarize_series(rye_roll)
 
     return {
@@ -146,23 +160,23 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
     lines = []
     lines.append(f"Average efficiency (RYE mean) is {mean_v:.3f}. "
                  f"Values typically range between {min_v:.3f} and {max_v:.3f}.")
-    lines.append(f"Resilience index (stability) is {resil:.3f} — higher means steadier efficiency under fluctuation.")
+    if "resilience" in summary:
+        lines.append(f"Resilience index is {resil:.3f} — higher means steadier efficiency under fluctuation.")
     if mean_v > 1.0:
-        lines.append("On average, each unit of energy returned more than one unit of repair which is an excellent efficiency level.")
+        lines.append("On average, each unit of energy returned more than one unit of repair, which is an excellent efficiency level.")
     elif mean_v > 0.5:
         lines.append("Efficiency is solid. Small process changes that reduce energy or boost repair should lift the mean further.")
     else:
-        lines.append("Efficiency is modest. Look for high energy and low return segments to prune or repair.")
+        lines.append("Efficiency is modest. Look for high-energy/low-return segments to prune or repair.")
 
-    lines.append(f"The report used a rolling window of {window} to smooth short term noise.")
+    lines.append(f"The report used a rolling window of {window} to smooth short-term noise.")
     if sim_mult != 1.0:
         if sim_mult < 1.0:
-            lines.append(f"An energy down scaling factor of {sim_mult:.2f} was simulated. RYE should increase under this scenario.")
+            lines.append(f"An energy down-scaling factor of {sim_mult:.2f} was simulated. RYE should increase under this scenario.")
         else:
-            lines.append(f"An energy up scaling factor of {sim_mult:.2f} was simulated. RYE may fall unless repair improved proportionally.")
+            lines.append(f"An energy up-scaling factor of {sim_mult:.2f} was simulated. RYE may fall unless repair improved proportionally.")
 
-    lines.append("Next steps: identify spikes or dips in the RYE curve, map them to events or interventions, "
-                 "and iterate TGRM loops to raise average RYE.")
+    lines.append("Next: identify spikes or dips in the RYE curve, map them to events or interventions, and iterate TGRM loops to raise average RYE.")
     return " ".join(lines)
 
 # ---------------- Main UI ----------------
@@ -184,7 +198,7 @@ with tab1:
 
             colA, colB = st.columns(2)
             colA.metric("RYE mean", f"{summary['mean']:.4f}", help="Average RYE across rows")
-            colB.metric("Resilience Index", f"{summary.get('resilience',0):.3f}", help="How stable efficiency remains under fluctuation")
+            colB.metric("Resilience Index", f"{summary.get('resilience', 0):.3f}", help="How stable efficiency remains under fluctuation")
 
             st.write("Columns:")
             st.json(list(df1.columns))
@@ -201,11 +215,13 @@ with tab1:
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
             else:
-                fig = px.line(rye, title="RYE")
+                # Build small DataFrames so Plotly labels are clear
+                fig = px.line(pd.DataFrame({"RYE": rye}), y="RYE", title="RYE")
                 add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
 
-                fig2 = px.line(rye_roll, title=f"RYE rolling window {window}")
+                fig2 = px.line(pd.DataFrame({f"RYE rolling {window}": rye_roll}),
+                               y=f"RYE rolling {window}", title=f"RYE rolling window {window}")
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
 
@@ -262,13 +278,14 @@ with tab2:
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
             else:
-                fig = px.line(b1["rye"], title="RYE comparison")
-                fig.add_scatter(y=b2["rye"], mode="lines", name="B")
+                fig = px.line(pd.DataFrame({"RYE_A": b1["rye"]}), y="RYE_A", title="RYE comparison")
+                fig.add_scatter(y=b2["rye"], mode="lines", name="RYE_B")
                 add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
 
-                fig2 = px.line(b1["rye_roll"], title=f"RYE rolling {window} comparison")
-                fig2.add_scatter(y=b2["rye_roll"], mode="lines", name="B")
+                fig2 = px.line(pd.DataFrame({f"RYE_A_rolling_{window}": b1["rye_roll"]}),
+                               y=f"RYE_A_rolling_{window}", title=f"RYE rolling {window} comparison")
+                fig2.add_scatter(y=b2["rye_roll"], mode="lines", name=f"RYE_B_rolling_{window}")
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
 
@@ -336,7 +353,7 @@ with tab4:
             with colx:
                 if st.button("Generate PDF report", use_container_width=True):
                     if build_pdf is None:
-                        st.error("PDF generator not available. Ensure report.py exists and fpdf is in requirements.txt")
+                        st.error("PDF generator not available. Ensure report.py exists and **fpdf2** is in requirements.txt")
                     else:
                         pdf_bytes = build_pdf(
                             list(rye),
