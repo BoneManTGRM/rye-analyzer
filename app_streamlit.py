@@ -444,8 +444,13 @@ with tab1:
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
 
-                fig3 = px.line(x=idx, y=rye_cum, labels({"x": col_time, "y": "Cumulative RYE"}),
-                               title="Cumulative RYE (sum of step yields)")
+                # FIXED: labels must be passed as a keyword arg, not as a positional dict
+                fig3 = px.line(
+                    x=idx,
+                    y=rye_cum,
+                    labels={"x": col_time, "y": "Cumulative RYE"},
+                    title="Cumulative RYE (sum of step yields)"
+                )
                 st.plotly_chart(fig3, use_container_width=True)
             else:
                 fig = px.line(pd.DataFrame({"RYE": rye}), y="RYE", title="RYE")
@@ -558,8 +563,13 @@ with tab2:
                 add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
 
-                fig2 = px.line(x=x1, y=b1["rye_roll"], labels({"x": col_time, "y": f"RYE rolling {b1['w']}"}),
-                               title=f"RYE rolling comparison (A:{b1['w']} / B:{b2['w']})")
+                # FIXED: labels must be keyword arg
+                fig2 = px.line(
+                    x=x1,
+                    y=b1["rye_roll"],
+                    labels={"x": col_time, "y": f"RYE rolling {b1['w']}"},
+                    title=f"RYE rolling comparison (A:{b1['w']} / B:{b2['w']})"
+                )
                 fig2.add_scatter(x=x2, y=b2["rye_roll"], mode="lines", name="B")
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
@@ -606,6 +616,7 @@ with tab3:
                 fig = px.line(dfp, y="RYE", color=col_domain, title="RYE by domain")
             add_stability_bands(fig)
             st.plotly_chart(fig)
+
 # ---------- Tab 4 ----------
 with tab4:
     if df1 is None:
