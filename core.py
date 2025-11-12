@@ -23,8 +23,10 @@ from pandas.errors import EmptyDataError  # added
 # PRESETS
 # ------------------------------
 try:
+    # If a full presets.py exists, use that (preferred).
     from presets import PRESETS  # type: ignore
 except Exception:
+    # Fallback minimal preset set, used only when presets.py is missing.
     @dataclass(frozen=True)
     class Preset:
         name: str
@@ -43,8 +45,27 @@ except Exception:
         "AI": Preset(
             "AI",
             time=_kw("time", "step", "iteration", "epoch", "t"),
-            performance=_kw("performance", "accuracy", "acc", "f1", "reward", "score", "coherence", "loss_inv", "bleu", "rouge"),
-            energy=_kw("energy", "tokens", "compute", "cost", "gradient_updates", "lr", "batch_tokens"),
+            performance=_kw(
+                "performance",
+                "accuracy",
+                "acc",
+                "f1",
+                "reward",
+                "score",
+                "coherence",
+                "loss_inv",
+                "bleu",
+                "rouge",
+            ),
+            energy=_kw(
+                "energy",
+                "tokens",
+                "compute",
+                "cost",
+                "gradient_updates",
+                "lr",
+                "batch_tokens",
+            ),
             domain="domain",
             default_rolling=10,
             tooltips={"loss_inv": "1/loss, higher is better"},
@@ -52,16 +73,49 @@ except Exception:
         "Biology": Preset(
             "Biology",
             time=_kw("time", "t", "hours", "days", "samples"),
-            performance=_kw("performance", "viability", "function", "yield", "recovery", "signal", "od", "growth", "fitness"),
-            energy=_kw("energy", "dose", "stressor", "input", "treatment", "drug", "radiation"),
+            performance=_kw(
+                "performance",
+                "viability",
+                "function",
+                "yield",
+                "recovery",
+                "signal",
+                "od",
+                "growth",
+                "fitness",
+            ),
+            energy=_kw(
+                "energy",
+                "dose",
+                "stressor",
+                "input",
+                "treatment",
+                "drug",
+                "radiation",
+            ),
             domain="domain",
             default_rolling=10,
         ),
         "Robotics": Preset(
             "Robotics",
             time=_kw("time", "t", "cycle", "episode"),
-            performance=_kw("performance", "task_success", "score", "stability", "tracking_inv", "uptime", "mean_reward"),
-            energy=_kw("energy", "power", "torque_int", "battery_used", "effort", "cpu_load"),
+            performance=_kw(
+                "performance",
+                "task_success",
+                "score",
+                "stability",
+                "tracking_inv",
+                "uptime",
+                "mean_reward",
+            ),
+            energy=_kw(
+                "energy",
+                "power",
+                "torque_int",
+                "battery_used",
+                "effort",
+                "cpu_load",
+            ),
             domain="domain",
             default_rolling=10,
         ),
@@ -69,12 +123,36 @@ except Exception:
             "Marine Biology",
             time=_kw("time", "t", "date", "day", "doy", "timestamp", "sample_time"),
             performance=_kw(
-                "performance", "survival", "growth", "calcification", "recruitment", "photosynthesis",
-                "chlorophyll", "chl", "coverage", "abundance", "diversity", "shannon", "richness"
+                "performance",
+                "survival",
+                "growth",
+                "calcification",
+                "recruitment",
+                "photosynthesis",
+                "chlorophyll",
+                "chl",
+                "coverage",
+                "abundance",
+                "diversity",
+                "shannon",
+                "richness",
             ),
             energy=_kw(
-                "energy", "dose", "nutrients", "nitrate", "phosphate", "silicate", "light", "par",
-                "effort", "treatment", "temperature", "temp", "pco2", "salinity", "stress"
+                "energy",
+                "dose",
+                "nutrients",
+                "nitrate",
+                "phosphate",
+                "silicate",
+                "light",
+                "par",
+                "effort",
+                "treatment",
+                "temperature",
+                "temp",
+                "pco2",
+                "salinity",
+                "stress",
             ),
             domain="domain",
             default_rolling=10,
@@ -83,35 +161,147 @@ except Exception:
         "Fisheries": Preset(
             "Fisheries",
             time=_kw("time", "t", "date", "trip", "haul", "set", "tow"),
-            performance=_kw("performance", "cpue", "yield", "biomass", "catch_rate", "survival", "recruitment"),
-            energy=_kw("energy", "effort", "soak_time", "net_hours", "trawl_hours", "fuel", "cost"),
+            performance=_kw(
+                "performance",
+                "cpue",
+                "yield",
+                "biomass",
+                "catch_rate",
+                "survival",
+                "recruitment",
+            ),
+            energy=_kw(
+                "energy",
+                "effort",
+                "soak_time",
+                "net_hours",
+                "trawl_hours",
+                "fuel",
+                "cost",
+            ),
             domain="domain",
             default_rolling=10,
         ),
         "Coral Reef Monitoring": Preset(
             "Coral Reef Monitoring",
             time=_kw("time", "t", "date", "survey", "dive"),
-            performance=_kw("performance", "live_coral_cover", "juvenile_density", "calcification", "photosynthesis", "recovery"),
-            energy=_kw("energy", "intervention", "outplanting", "nursery_cost", "effort", "par", "dose"),
+            performance=_kw(
+                "performance",
+                "live_coral_cover",
+                "juvenile_density",
+                "calcification",
+                "photosynthesis",
+                "recovery",
+            ),
+            energy=_kw(
+                "energy",
+                "intervention",
+                "outplanting",
+                "nursery_cost",
+                "effort",
+                "par",
+                "dose",
+            ),
             domain="domain",
             default_rolling=10,
         ),
         "Oceanography/CTD": Preset(
             "Oceanography/CTD",
             time=_kw("time", "t", "cast", "profile", "date"),
-            performance=_kw("performance", "signal", "stability", "coherence", "recovery", "oxygen", "chlorophyll", "fluorescence"),
-            energy=_kw("energy", "pump_power", "ship_time", "fuel", "cost", "cast_depth", "niskin_trips"),
+            performance=_kw(
+                "performance",
+                "signal",
+                "stability",
+                "coherence",
+                "recovery",
+                "oxygen",
+                "chlorophyll",
+                "fluorescence",
+            ),
+            energy=_kw(
+                "energy",
+                "pump_power",
+                "ship_time",
+                "fuel",
+                "cost",
+                "cast_depth",
+                "niskin_trips",
+            ),
             domain="domain",
             default_rolling=10,
         ),
         "Aquaculture": Preset(
             "Aquaculture",
             time=_kw("time", "t", "day", "date", "batch"),
-            performance=_kw("performance", "growth_rate", "survival", "feed_conversion_inv", "yield", "biomass", "health_score"),
-            energy=_kw("energy", "feed", "aeration_power", "oxygenation", "water_exchange", "temperature", "dose", "cost"),
+            performance=_kw(
+                "performance",
+                "growth_rate",
+                "survival",
+                "feed_conversion_inv",
+                "yield",
+                "biomass",
+                "health_score",
+            ),
+            energy=_kw(
+                "energy",
+                "feed",
+                "aeration_power",
+                "oxygenation",
+                "water_exchange",
+                "temperature",
+                "dose",
+                "cost",
+            ),
             domain="domain",
             default_rolling=10,
             tooltips={"feed_conversion_inv": "Inverse FCR, higher is better"},
+        ),
+        # Fallback Marketing preset (in case presets.py is not present)
+        "Marketing": Preset(
+            "Marketing",
+            time=_kw("date", "time", "day", "week", "campaign_day", "cohort_day"),
+            performance=_kw(
+                "performance",
+                "ctr",
+                "click_through_rate",
+                "conversion_rate",
+                "conv_rate",
+                "cvr",
+                "roas",
+                "return_on_ad_spend",
+                "retention",
+                "engagement",
+                "open_rate",
+                "click_rate",
+                "reply_rate",
+                "signup_rate",
+                "trial_rate",
+                "mql_rate",
+                "sql_rate",
+            ),
+            energy=_kw(
+                "energy",
+                "spend",
+                "ad_spend",
+                "budget",
+                "media_spend",
+                "impressions",
+                "views",
+                "emails_sent",
+                "sends",
+                "touches",
+                "clicks",
+                "sessions",
+                "visits",
+                "ad_cost",
+            ),
+            domain="domain",
+            default_rolling=14,
+            tooltips={
+                "ctr": "Click-through rate; clicks / impressions.",
+                "roas": "Return on ad spend; revenue / ad_spend.",
+                "retention": "Share of users who stay active over time.",
+            },
         ),
     }
 
@@ -120,34 +310,173 @@ except Exception:
 # ------------------------------
 COLUMN_ALIASES: Dict[str, List[str]] = {
     "time": [
-        "time", "t", "timestamp", "date", "datetime", "step", "iteration", "epoch",
-        "hours", "days", "sample_time", "survey", "cast", "profile", "dive", "trip", "haul", "set", "tow", "batch"
+        "time",
+        "t",
+        "timestamp",
+        "date",
+        "datetime",
+        "step",
+        "iteration",
+        "epoch",
+        "hours",
+        "days",
+        "sample_time",
+        "survey",
+        "cast",
+        "profile",
+        "dive",
+        "trip",
+        "haul",
+        "set",
+        "tow",
+        "batch",
+        "week",
+        "campaign_day",
+        "cohort_day",
     ],
     "performance": [
-        "performance", "repair", "accuracy", "acc", "f1", "reward", "score", "coherence", "loss_inv", "bleu", "rouge",
-        "viability", "function", "yield", "recovery", "signal", "od", "growth", "fitness",
-        "survival", "calcification", "recruitment", "photosynthesis", "chlorophyll", "chl",
-        "coverage", "abundance", "diversity", "shannon", "richness",
-        "cpue", "biomass", "catch_rate", "juvenile_density", "live_coral_cover",
-        "oxygen", "fluorescence", "growth_rate", "feed_conversion_inv", "health_score",
-        "soh", "capacity_retained"
+        "performance",
+        "repair",
+        "accuracy",
+        "acc",
+        "f1",
+        "reward",
+        "score",
+        "coherence",
+        "loss_inv",
+        "bleu",
+        "rouge",
+        "viability",
+        "function",
+        "yield",
+        "recovery",
+        "signal",
+        "od",
+        "growth",
+        "fitness",
+        "survival",
+        "calcification",
+        "recruitment",
+        "photosynthesis",
+        "chlorophyll",
+        "chl",
+        "coverage",
+        "abundance",
+        "diversity",
+        "shannon",
+        "richness",
+        "cpue",
+        "biomass",
+        "catch_rate",
+        "juvenile_density",
+        "live_coral_cover",
+        "oxygen",
+        "fluorescence",
+        "growth_rate",
+        "feed_conversion_inv",
+        "health_score",
+        "soh",
+        "capacity_retained",
+        # marketing / web
+        "ctr",
+        "click_through_rate",
+        "conversion_rate",
+        "conv_rate",
+        "cvr",
+        "roas",
+        "return_on_ad_spend",
+        "retention",
+        "engagement",
+        "open_rate",
+        "click_rate",
+        "reply_rate",
+        "signup_rate",
+        "trial_rate",
+        "mql_rate",
+        "sql_rate",
     ],
     "energy": [
-        "energy", "effort", "cost", "compute", "tokens", "gradient_updates", "lr", "batch_tokens",
-        "dose", "stressor", "input", "treatment", "drug", "radiation",
-        "par", "light", "temperature", "temp", "pco2", "salinity", "nutrients", "nitrate", "phosphate", "silicate",
-        "feed", "aeration_power", "oxygenation", "water_exchange",
-        "pump_power", "ship_time", "fuel", "cast_depth", "niskin_trips", "soak_time", "net_hours", "trawl_hours",
-        "power", "cpu_load", "torque_int", "battery_used"
+        "energy",
+        "effort",
+        "cost",
+        "compute",
+        "tokens",
+        "gradient_updates",
+        "lr",
+        "batch_tokens",
+        "dose",
+        "stressor",
+        "input",
+        "treatment",
+        "drug",
+        "radiation",
+        "par",
+        "light",
+        "temperature",
+        "temp",
+        "pco2",
+        "salinity",
+        "nutrients",
+        "nitrate",
+        "phosphate",
+        "silicate",
+        "feed",
+        "aeration_power",
+        "oxygenation",
+        "water_exchange",
+        "pump_power",
+        "ship_time",
+        "fuel",
+        "cast_depth",
+        "niskin_trips",
+        "soak_time",
+        "net_hours",
+        "trawl_hours",
+        "power",
+        "cpu_load",
+        "torque_int",
+        "battery_used",
+        # marketing / business
+        "spend",
+        "ad_spend",
+        "media_spend",
+        "budget",
+        "impressions",
+        "views",
+        "emails_sent",
+        "sends",
+        "touches",
+        "clicks",
+        "sessions",
+        "visits",
+        "ad_cost",
     ],
-    "domain": ["domain", "group", "condition", "treatment_group", "species", "site", "station", "reef", "habitat"],
+    "domain": [
+        "domain",
+        "group",
+        "condition",
+        "treatment_group",
+        "species",
+        "site",
+        "station",
+        "reef",
+        "habitat",
+        # marketing / business
+        "campaign",
+        "channel",
+        "segment",
+        "cohort",
+        "creative",
+        "ad_group",
+        "placement",
+    ],
 }
 
 # ------------------------------
 # File IO
 # ------------------------------
 def _read_text_table(text: str) -> pd.DataFrame:
-    # added guard for empty uploads
+    # guard for empty uploads
     if not text or not text.strip():
         raise EmptyDataError("Uploaded text file is empty.")
     first = text.splitlines()[0] if text.splitlines() else ""
@@ -197,7 +526,7 @@ def load_table(src) -> pd.DataFrame:
         text = data.decode("utf-8", errors="replace")
         return _read_text_table(text)
 
-    # Path like
+    # Pathlike
     path = str(src)
     lower = path.lower()
 
@@ -243,6 +572,7 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         s = re.sub(r"[^\w]+", "_", s)
         s = re.sub(r"_+", "_", s).strip("_")
         return s or "col"
+
     out = df.copy()
     out.columns = [norm(c) for c in out.columns]
     return out
@@ -291,7 +621,11 @@ def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[s
         e = [c for c in cols if "energy" in c.lower()]
         out["energy"] = e[0] if e else (numeric_cols[1] if len(numeric_cols) > 1 else None)
     if out["time"] is None:
-        t = [c for c in cols if any(k in c.lower() for k in ("time", "date", "epoch", "step", "iteration"))]
+        t = [
+            c
+            for c in cols
+            if any(k in c.lower() for k in ("time", "date", "epoch", "step", "iteration"))
+        ]
         out["time"] = t[0] if t else None
     if out["domain"] is None:
         d = [c for c in cols if c.lower() in COLUMN_ALIASES["domain"]]
@@ -325,16 +659,34 @@ def scale_units(arr: Sequence[float], factor: float) -> np.ndarray:
 # ------------------------------
 def compute_rye_from_df(
     df: pd.DataFrame,
-    repair_col: str,
-    energy_col: str,
+    repair_col: str = "performance",
+    energy_col: str = "energy",
     time_col: Optional[str] = None,
     clamp_negative_delta: bool = True,
     energy_floor: float = 1e-9,
 ) -> np.ndarray:
     """
     RYE per step = max(delta performance, 0) divided by max(energy, energy_floor)
+
+    repair_col: column with performance / repair signal
+    energy_col: column with effort / cost / energy / tokens / spend
+    time_col:   currently unused, kept for future time-aware variants
+
     Set clamp_negative_delta=False to allow negative deltas.
     """
+
+    # Legacy aliasing: if requested names are missing but canonical names exist,
+    # transparently switch to them.
+    if repair_col not in df.columns and "performance" in df.columns:
+        repair_col = "performance"
+    if energy_col not in df.columns and "energy" in df.columns:
+        energy_col = "energy"
+
+    missing = [c for c in (repair_col, energy_col) if c not in df.columns]
+    if missing:
+        # This message is what Streamlit will show if data really is missing.
+        raise ValueError(f"Missing columns: {', '.join(missing)}")
+
     perf = _coerce_numeric(df[repair_col])
     energy = _coerce_numeric(df[energy_col])
 
@@ -347,6 +699,32 @@ def compute_rye_from_df(
     rye = dperf / denom
     rye = np.where(np.isfinite(rye), rye, 0.0)
     return rye
+
+def compute_rye(
+    df: pd.DataFrame,
+    repair_col: str = "accuracy",
+    energy_col: str = "tokens",
+    **kwargs,
+) -> np.ndarray:
+    """
+    Backwards-compatible wrapper.
+
+    Older code may call compute_rye(df) expecting accuracy/tokens.
+    This wrapper:
+      - maps accuracy→performance and tokens→energy when needed
+      - raises a clear error only if no suitable columns exist
+    """
+    # If legacy defaults are missing but canonical names exist, swap.
+    if repair_col not in df.columns and "performance" in df.columns:
+        repair_col = "performance"
+    if energy_col not in df.columns and "energy" in df.columns:
+        energy_col = "energy"
+
+    missing = [c for c in (repair_col, energy_col) if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {', '.join(missing)}")
+
+    return compute_rye_from_df(df, repair_col=repair_col, energy_col=energy_col, **kwargs)
 
 def compute_rye_cumulative(rye_series: Sequence[float]) -> np.ndarray:
     a = np.asarray(rye_series, dtype=float)
@@ -384,13 +762,22 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
     a = a[np.isfinite(a)]
     if a.size == 0:
         base = {
-            "mean": 0.0, "median": 0.0, "min": 0.0, "max": 0.0,
-            "count": 0.0, "std": 0.0, "resilience": 0.0,
-            "p10": 0.0, "p50": 0.0, "p90": 0.0, "iqr": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "count": 0.0,
+            "std": 0.0,
+            "resilience": 0.0,
+            "p10": 0.0,
+            "p50": 0.0,
+            "p90": 0.0,
+            "iqr": 0.0,
         }
         if with_shape:
             base.update({"skew": 0.0, "kurtosis": 0.0})
         return base
+
     mean = float(np.nanmean(a))
     std = float(np.nanstd(a))
     cv = std / (abs(mean) + 1e-9)
@@ -413,6 +800,7 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
     if with_shape:
         try:
             from scipy.stats import skew, kurtosis  # type: ignore
+
             out["skew"] = float(skew(a, nan_policy="omit"))
             out["kurtosis"] = float(kurtosis(a, nan_policy="omit"))
         except Exception:
@@ -425,7 +813,7 @@ def summarize_by_domain(
     domain_col: str,
     repair_col: str,
     energy_col: str,
-    window: Optional[int] = None
+    window: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Compute per domain RYE mean and resilience. If window is given, also include rolling mean.
@@ -444,7 +832,11 @@ def summarize_by_domain(
 # ------------------------------
 # Optional analytics
 # ------------------------------
-def detect_regimes(series: Sequence[float], min_len: int = 5, gap: float = 0.05) -> List[Dict[str, Union[int, str]]]:
+def detect_regimes(
+    series: Sequence[float],
+    min_len: int = 5,
+    gap: float = 0.05,
+) -> List[Dict[str, Union[int, str]]]:
     x = np.array(series, dtype=float)
     if x.size == 0:
         return []
@@ -455,17 +847,21 @@ def detect_regimes(series: Sequence[float], min_len: int = 5, gap: float = 0.05)
         if abs(roll[i] - roll[i - 1]) > gap:
             if (i - 1) - s + 1 >= min_len:
                 mean_seg = float(np.nanmean(x[s:i]))
-                regimes.append({"start": int(s), "end": int(i - 1), "label": f"mean≈{mean_seg:.3f}"})
+                regimes.append(
+                    {"start": int(s), "end": int(i - 1), "label": f"mean≈{mean_seg:.3f}"}
+                )
             s = i
     if len(roll) - s >= min_len:
         mean_seg = float(np.nanmean(x[s:]))
-        regimes.append({"start": int(s), "end": int(len(roll) - 1), "label": f"mean≈{mean_seg:.3f}"})
+        regimes.append(
+            {"start": int(s), "end": int(len(roll) - 1), "label": f"mean≈{mean_seg:.3f}"}
+        )
     return regimes
 
 def energy_delta_performance_correlation(
     df: pd.DataFrame,
     perf_col: str,
-    energy_col: str
+    energy_col: str,
 ) -> Dict[str, float]:
     perf = _coerce_numeric(df[perf_col])
     dperf = np.diff(perf, prepend=perf[:1])
@@ -478,6 +874,7 @@ def energy_delta_performance_correlation(
 
     try:
         from scipy.stats import pearsonr, spearmanr  # type: ignore
+
         pr = float(pearsonr(energy[m], dperf[m]).statistic)
         sr = float(spearmanr(energy[m], dperf[m]).statistic)
         return {"pearson": pr, "spearman": sr}
@@ -494,6 +891,7 @@ def energy_delta_performance_correlation(
             ranks = np.empty_like(order, dtype=float)
             ranks[order] = np.arange(1, len(v) + 1, dtype=float)
             return ranks
+
         r_energy = _rank(energy[m])
         r_dperf = _rank(dperf[m])
         sr = float(np.corrcoef(r_energy, r_dperf)[0, 1])
@@ -517,7 +915,7 @@ def bootstrap_rolling_mean(
     n_boot: int = 100,
     q_low: float = 0.10,
     q_mid: float = 0.50,
-    q_high: float = 0.90
+    q_high: float = 0.90,
 ) -> Dict[str, List[float]]:
     x = np.array(series, dtype=float)
     x = np.where(np.isfinite(x), x, 0.0)
@@ -531,7 +929,11 @@ def bootstrap_rolling_mean(
         idx = rng.integers(0, n, size=n)
         rs = rolling_series(x[idx], max(1, window))
         if len(rs) < n:
-            rs = np.pad(rs, (0, n - len(rs)), constant_values=rs[-1] if len(rs) > 0 else 0.0)
+            rs = np.pad(
+                rs,
+                (0, n - len(rs)),
+                constant_values=rs[-1] if len(rs) > 0 else 0.0,
+            )
         elif len(rs) > n:
             rs = rs[:n]
         rolls.append(rs)
@@ -562,6 +964,7 @@ __all__ = [
     "COLUMN_ALIASES",
     "safe_float",
     "compute_rye_from_df",
+    "compute_rye",
     "compute_rye_cumulative",
     "rolling_series",
     "ema_series",
