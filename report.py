@@ -1,19 +1,20 @@
 # report.py
-# Build a compact, multi-page PDF report for RYE analyses (Unicode-safe, clickable links, richer metadata).
+# Build a compact, multi-page PDF report for RYE analyses
+# (Unicode-safe, clickable links, safer wrapping, richer metadata).
 
 from __future__ import annotations
 import os, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
-matplotlib.use("Agg")  # headless backend for servers
+matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 
 try:
-    from fpdf import FPDF  # works with both legacy fpdf and modern fpdf2
+    # Use fpdf2 (modern). If classic fpdf is installed, this still imports as 'fpdf'.
+    from fpdf import FPDF
 except Exception as e:
-    raise RuntimeError("fpdf/fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
-
+    raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
 
 # -----------------------------
 # Unicode handling
@@ -21,10 +22,11 @@ except Exception as e:
 UNICODE_FONT_PATH = "fonts/DejaVuSans.ttf"
 UNICODE_FONT_NAME = "DejaVu"
 
+
 def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
     """
     Convert any value to str. If we don't have a Unicode font loaded,
-    replace characters outside Latin-1 so core fonts won't crash.
+    replace characters outside Latin-1 so core Helvetica won't crash.
     """
     s = str(txt)
     if unicode_ok:
@@ -40,6 +42,7 @@ def _fmt_val(v: Union[str, int, float]) -> str:
         return f"{v:.3f}"
     return str(v)
 
+
 def _normalize_doi_or_url(val: str) -> Optional[str]:
     """
     Accepts a DOI (e.g., '10.5281/zenodo.12345') or a URL, returns a clickable https URL.
@@ -47,27 +50,46 @@ def _normalize_doi_or_url(val: str) -> Optional[str]:
     if not val:
         return None
     s = str(val).strip()
-    if s.startswith("10."):  # DOI
+    if s.startswith("10."):
         return f"https://doi.org/{s}"
-    if s.startswith(("http://", "https://")):
+    if s.startswith("http://") or s.startswith("https://"):
         return s
-    if "zenodo.org" in s and not s.startswith(("http://", "https://")):
+    if "zenodo.org" in s and not s.startswith("http"):
         return f"https://{s}"
     return s
 
-def _hyperlink(pdf: "Report", text: str, url: str):
-    """Render a clickable link (blue + underline if possible)."""
+
+def _soft_wrap_long_token(s: str) -> str:
+    """
+    Insert zero-width break hints into very long tokens (URLs, IDs) so MultiCell can wrap.
+    """
+    # Add break opportunities around common URL separators
+    s = s.replace("/", "/\u200b")
+    s = s.replace("?", "?\u200b")
+    s = s.replace("&", "&\u200b")
+    s = s.replace("=", "=\u200b")
+    s = s.replace("-", "-\u200b")
+    s = s.replace("_", "_\u200b")
+    s = s.replace(".", ".\u200b")
+    return s
+
+
+def _hyperlink(pdf: "Report", display_text: str, url: str):
+    """
+    Render a clickable link (blue + underline). We keep display_text short so it never overflows.
+    """
     url = (url or "").strip()
+    txt = _sanitize(display_text, pdf.unicode_ok)
     if not url:
-        pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L")
+        pdf.multi_cell(0, 6, txt, align="L")
         return
     pdf.set_text_color(0, 0, 200)
     if pdf.unicode_ok:
         pdf.set_font(UNICODE_FONT_NAME, "U", 11)
     else:
         pdf.set_font("Helvetica", "U", 11)
-    pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L", link=url)
-    # restore defaults
+    pdf.multi_cell(0, 6, txt, align="L", link=url)
+    # restore
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
         pdf.set_font(UNICODE_FONT_NAME, "", 11)
@@ -79,12 +101,14 @@ def _hyperlink(pdf: "Report", text: str, url: str):
 # PDF helpers
 # -----------------------------
 class Report(FPDF):
-    """A4 portrait with margins, auto page breaks, and footer page numbers."""
+    """A4 portrait with larger margins, auto page breaks, and footer page numbers."""
     def __init__(self):
         super().__init__(orientation="P", unit="mm", format="A4")
-        self.set_margins(12, 12, 12)
-        self.set_auto_page_break(auto=True, margin=15)
+        # Slightly larger margins to avoid any viewer cropping on phones
+        self.set_margins(15, 15, 15)
+        self.set_auto_page_break(auto=True, margin=18)
         self.set_text_color(0, 0, 0)
+
         self.unicode_ok = False
         try:
             if os.path.exists(UNICODE_FONT_PATH):
@@ -109,20 +133,27 @@ class Report(FPDF):
 
 
 def _font(pdf: Report, style: str = "", size: int = 11):
+    """Use Unicode font if available; otherwise Helvetica. Always reset text color to black."""
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
         pdf.set_font(UNICODE_FONT_NAME, style, size)
     else:
         pdf.set_font("Helvetica", style, size)
 
+
 def _h1(pdf: Report, text: str):
-    _font(pdf, "B", 18); pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
+    _font(pdf, "B", 18)
+    pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
+
 
 def _h2(pdf: Report, text: str):
-    _font(pdf, "B", 13); pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
+    _font(pdf, "B", 13)
+    pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
+
 
 def _body(pdf: Report, size: int = 11):
     _font(pdf, "", size)
+
 
 def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
     """Add a top-right logo if present (non-fatal if missing)."""
@@ -134,29 +165,33 @@ def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
     except Exception:
         pass
 
+
 def _key_val_rows(
     data: List[Tuple[str, Union[str, float, int]]],
     key_w: float,
     val_w: float,
 ):
-    """Renderer that prints aligned key:value rows within the given widths."""
+    """
+    Render aligned key:value rows. We also soft-wrap long tokens in values.
+    """
     def render(pdf: Report):
         for k, v in data:
+            key = _sanitize(str(k), pdf.unicode_ok)
+            val = _sanitize(str(v), pdf.unicode_ok)
+            val = _soft_wrap_long_token(val)
             _font(pdf, "B", 11)
-            pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
+            pdf.cell(key_w, 6, key, align="L")
             _body(pdf, 11)
-            pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
+            pdf.multi_cell(val_w, 6, val, align="L")
     return render
 
 
 # -----------------------------
-# Charts
+# Chart
 # -----------------------------
-def _add_series_plot(
-    pdf: Report,
-    series_dict: Dict[str, Sequence[float]],
-    title: str = "Repair Yield per Energy"
-):
+def _add_series_plot(pdf: Report,
+                     series_dict: Dict[str, Sequence[float]],
+                     title: str = "Repair Yield per Energy"):
     """Render a simple line chart into the PDF using matplotlib."""
     fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
     for label, series in series_dict.items():
@@ -198,14 +233,12 @@ def build_pdf(
     """
     Build a multi-section PDF and return bytes.
 
-    Backward-compatible:
-      - plot_series may be a single dict {label: series} or a list of such dicts.
-      - metadata may include:
-          - 'dataset_link' or raw DOI (auto-normalized and made clickable)
-          - 'generated' or 'timestamp'
-          - 'sample_n' (int, default 100)
-          - 'notes' (str)
-          - 'columns' (list of column names)
+    metadata may include:
+      - 'dataset_link' (or raw DOI) → clickable link
+      - 'generated' or 'timestamp'
+      - 'sample_n' (int, default 100)
+      - 'notes' (str)
+      - 'columns' (list of column names)
     """
     pdf = Report()
     pdf.add_page()
@@ -217,36 +250,36 @@ def build_pdf(
     generated = metadata.get("generated") or metadata.get("timestamp") or ""
     _body(pdf, 10)
     if generated:
-        pdf.cell(0, 6, _sanitize(f"Generated: {generated}", pdf.unicode_ok), ln=1)
+        pdf.multi_cell(0, 6, _sanitize(f"Generated: {generated}", pdf.unicode_ok), align="L")
     pdf.ln(2)
 
     # Dataset metadata
     _h2(pdf, "Dataset metadata")
     meta_rows: List[Tuple[str, Union[str, float, int]]] = []
 
-    # clickable dataset link
+    # Render link as short, clickable label (no long URL on the page)
     ds_link_raw = str(metadata.get("dataset_link", "") or "").strip()
     if ds_link_raw:
         url = _normalize_doi_or_url(ds_link_raw)
         if url:
             _body(pdf, 11)
-            _hyperlink(pdf, f"Dataset link: {url}", url)
+            _hyperlink(pdf, "Dataset link (tap to open)", url)
 
-    # other metadata (skip special keys)
+    # Add the rest of the metadata (skip special keys)
     for k, v in metadata.items():
         if k in ("generated", "timestamp", "dataset_link", "columns", "notes", "sample_n"):
             continue
         meta_rows.append((str(k), _fmt_val(v)))
     if meta_rows:
-        _key_val_rows(meta_rows, key_w=40, val_w=pdf.content_w - 40)(pdf)
+        _key_val_rows(meta_rows, key_w=42, val_w=pdf.content_w - 42)(pdf)
     pdf.ln(2)
 
-    # Summary statistics (includes 'resilience' if supplied)
+    # Summary statistics (includes anything you pass, e.g., 'resilience')
     _h2(pdf, "Summary statistics")
     items: List[Tuple[str, Union[str, float, int]]] = []
     for k, v in summary.items():
         items.append((str(k), _fmt_val(v)))
-    _key_val_rows(items, key_w=40, val_w=pdf.content_w - 40)(pdf)
+    _key_val_rows(items, key_w=42, val_w=pdf.content_w - 42)(pdf)
     pdf.ln(2)
 
     # Plots
@@ -265,7 +298,7 @@ def build_pdf(
     first_n = list(rye)[:n_show]
     left  = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 0]
     right = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 1]
-    col_w = (pdf.content_w - 5) / 2
+    col_w = (pdf.content_w - 6) / 2
     _body(pdf, 11)
     max_lines = max(len(left), len(right))
     for idx in range(max_lines):
@@ -274,7 +307,7 @@ def build_pdf(
         y0 = pdf.get_y(); x0 = pdf.get_x()
         pdf.multi_cell(col_w, 6, _sanitize(ltxt, pdf.unicode_ok), align="L")
         h_left = pdf.get_y() - y0
-        pdf.set_xy(x0 + col_w + 5, y0)
+        pdf.set_xy(x0 + col_w + 6, y0)
         pdf.multi_cell(col_w, 6, _sanitize(rtxt, pdf.unicode_ok), align="L")
         h_right = pdf.get_y() - y0
         pdf.set_y(y0 + max(h_left, h_right))
@@ -284,19 +317,13 @@ def build_pdf(
     cols = metadata.get("columns")
     if isinstance(cols, (list, tuple)) and len(cols) > 0:
         _h2(pdf, "Columns in dataset")
+        cols_text = ", ".join(map(str, cols))
+        cols_text = _soft_wrap_long_token(cols_text)
         _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(", ".join(map(str, cols)), pdf.unicode_ok), align="L")
-        pdf.ln(2)
+        pdf.multi_cell(0, 6, _sanitize(cols_text, pdf.unicode_ok), align="L")
+        pdf.ln(1)
 
-    # Optional: Notes
-    notes = metadata.get("notes")
-    if isinstance(notes, str) and notes.strip():
-        _h2(pdf, "Notes")
-        _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(notes.strip(), pdf.unicode_ok), align="L")
-        pdf.ln(2)
-
-    # Interpretation (auto-generate if not supplied)
+    # Interpretation (ASCII-only punctuation for max compatibility)
     if not interpretation:
         mean = float(summary.get("mean", 0.0) or 0.0)
         minv = float(summary.get("min", 0.0) or 0.0)
@@ -311,19 +338,33 @@ def build_pdf(
         )
     _h2(pdf, "Interpretation")
     _body(pdf, 11)
-    pdf.multi_cell(0, 6, _sanitize(interpretation, pdf.unicode_ok), align="L")
+    # replace em-dash with hyphen if font missing
+    interp_txt = str(interpretation).replace("—", "-")
+    pdf.multi_cell(0, 6, _sanitize(interp_txt, pdf.unicode_ok), align="L")
     pdf.ln(4)
 
-    # Footer note / provenance
-    _body(pdf, 10); pdf.cell(0, 6, _sanitize("RYE.", pdf.unicode_ok), ln=1)
-    _body(pdf, 9)
-    footer = (
-        "Open science by Cody Ryan Jenkins (CC BY 4.0). "
-        "Learn more: Reparodynamics • RYE (Repair Yield per Energy) • TGRM."
-    )
-    pdf.multi_cell(0, 5, _sanitize(footer, pdf.unicode_ok), align="L")
+    # Notes (optional)
+    notes = metadata.get("notes")
+    if isinstance(notes, str) and notes.strip():
+        _h2(pdf, "Notes")
+        _body(pdf, 11)
+        pdf.multi_cell(0, 6, _sanitize(notes, pdf.unicode_ok), align="L")
+        pdf.ln(2)
 
-    # Return exact bytes (fpdf2 returns bytes; classic fpdf returns latin-1 str)
+    # Footer note
+    _body(pdf, 10)
+    pdf.cell(0, 6, _sanitize("RYE.", pdf.unicode_ok), ln=1)
+    _body(pdf, 9)
+    pdf.multi_cell(
+        0, 5,
+        _sanitize(
+            "Open science by Cody Ryan Jenkins (CC BY 4.0). "
+            "Learn more: Reparodynamics  RYE (Repair Yield per Energy)  TGRM.",
+            pdf.unicode_ok
+        ),
+        align="L"
+    )
+
     out = pdf.output(dest="S")
     if isinstance(out, (bytes, bytearray)):
         return bytes(out)
