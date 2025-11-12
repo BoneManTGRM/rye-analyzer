@@ -5,21 +5,16 @@ numpy>=1.24.4
 plotly>=5.18.0
 matplotlib>=3.8.0
 
-# PDF generation (Unicode-safe)
-fpdf>=1.7.2
+# PDF generation (recommend fpdf2)
+fpdf2>=2.7.9
 
 # Date, time, and I/O
 python-dateutil>=2.9.0
 openpyxl>=3.1.0
-xlrd>=2.0.1
+# xlrd is only needed for legacy .xls; leave commented if you don’t need it
+# xlrd==1.2.0
+
+# Optional niceties
 requests>=2.32.0
-
-# Machine learning / robotics presets
-scikit-learn>=1.4.0
-scipy>=1.12.0
-
-# Streamlit caching and layout stability
-watchdog>=3.0.0
-
-# Optional but recommended for smoother UX and exports
 pillow>=10.2.0
+watchdog>=3.0.0
