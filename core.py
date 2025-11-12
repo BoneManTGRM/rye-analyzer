@@ -567,6 +567,19 @@ def load_table(src) -> pd.DataFrame:
 # Column normalization and inference
 # ------------------------------
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize column names to snake_case and add friendly aliases.
+
+    Important behavior for compatibility:
+      - If a dataframe has "performance" but not "accuracy",
+        create an "accuracy" column equal to "performance".
+      - If a dataframe has "energy" but not "tokens",
+        create a "tokens" column equal to "energy".
+
+    This lets older code or saved session_state that still refers
+    to accuracy/tokens work even when the actual CSV uses
+    performance/energy.
+    """
     def norm(c: str) -> str:
         s = str(c).strip().lower()
         s = re.sub(r"[^\w]+", "_", s)
@@ -575,6 +588,17 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.copy()
     out.columns = [norm(c) for c in out.columns]
+
+    cols = list(out.columns)
+
+    # Add compatibility aliases
+    if "performance" in cols and "accuracy" not in cols:
+        out["accuracy"] = out["performance"]
+        cols.append("accuracy")
+    if "energy" in cols and "tokens" not in cols:
+        out["tokens"] = out["energy"]
+        cols.append("tokens")
+
     return out
 
 def _pick_from_aliases(df_cols: List[str], candidates: List[str]) -> Optional[str]:
@@ -711,7 +735,7 @@ def compute_rye(
 
     Older code may call compute_rye(df) expecting accuracy/tokens.
     This wrapper:
-      - maps accuracy→performance and tokens→energy when needed
+      - maps accuracy to performance and tokens to energy when needed
       - raises a clear error only if no suitable columns exist
     """
     # If legacy defaults are missing but canonical names exist, swap.
