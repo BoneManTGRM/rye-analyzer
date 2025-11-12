@@ -178,7 +178,9 @@ def build_pdf(
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
-    W = 190  # printable width
+
+    # Compute printable width dynamically from margins
+    W = pdf.w - pdf.l_margin - pdf.r_margin
 
     # Header
     pdf.set_font("Helvetica", "B", 18)
@@ -191,7 +193,7 @@ def build_pdf(
     _section_title(pdf, "Summary stats", W)
     pdf.set_font("Helvetica", "", 11)
     keys = ["mean", "median", "min", "max", "std", "resilience", "count", "p10", "p50", "p90", "iqr"]
-    colw = W / 3
+    colw = W / 3.0
     for i, k in enumerate(keys):
         v = _fmt_num(summary.get(k, ""))
         pdf.cell(colw, 6, _latin1(f"{k}: {v}"))
