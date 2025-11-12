@@ -1,4 +1,3 @@
-# Core dependencies
 streamlit>=1.37.0
 pandas>=2.0.3
 numpy>=1.24.4
@@ -8,13 +7,12 @@ matplotlib>=3.8.0
 # PDF generation (recommend fpdf2)
 fpdf2>=2.7.9
 
-# Date, time, and I/O
 python-dateutil>=2.9.0
 openpyxl>=3.1.0
 # xlrd is only needed for legacy .xls; leave commented if you don’t need it
 # xlrd==1.2.0
 
-# Optional niceties
+# optional niceties
 requests>=2.32.0
 pillow>=10.2.0
 watchdog>=3.0.0
