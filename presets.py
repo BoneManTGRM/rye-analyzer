@@ -1,52 +1,154 @@
-# presets.py
+from __future__ import annotations
 from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 @dataclass(frozen=True)
 class Preset:
     name: str
-    default_window: int
-    min_window: int
-    max_window: int
-    plot_title: str
-    y_label: str
-    series_label: str = "RYE"
-    rolling_label: str = "RYE rolling"
-    interpretation_hint: str = ""
+    time: List[str]
+    performance: List[str]
+    energy: List[str]
+    domain: Optional[str] = None
+    default_rolling: int = 10
 
-PRESETS = {
-    "AI": Preset(
-        name="AI",
-        default_window=100, min_window=20, max_window=500,
-        plot_title="Repair Yield per Energy",
-        y_label="RYE",
-        interpretation_hint=(
-            "AI preset: window tuned for iteration-scale smoothing (50–200 typical). "
-            "Use for training runs, eval sweeps, or online adaptation."
-        ),
-    ),
-    "Biology": Preset(
-        name="Biology",
-        default_window=10, min_window=3, max_window=30,
-        plot_title="Repair Yield per Energy (Biological time-course)",
-        y_label="RYE",
-        interpretation_hint=(
-            "Biology preset: window sized for short time-course assays (5–15 typical). "
-            "Use for recovery curves, stress-response, or clinical markers."
-        ),
-    ),
-    "Robotics": Preset(
-        name="Robotics",
-        default_window=30, min_window=10, max_window=120,
-        plot_title="Repair Yield per Energy (Robotics/Systems)",
-        y_label="RYE",
-        interpretation_hint=(
-            "Robotics preset: window sized for cycles/episodes (20–60 typical). "
-            "Good for actuator wear, task success, or maintenance intervals."
-        ),
-    ),
-}
+# Helper to keep lists short but useful
+def _kw(*items): return list(dict.fromkeys([s.strip() for s in items if s]))
 
-DEFAULT_PRESET = PRESETS["AI"]
+PRESETS: Dict[str, Preset] = {
+    # --- Core set you already had ---
+    "AI": Preset("AI",
+        time=_kw("step","iteration","epoch","t","time"),
+        performance=_kw("accuracy","acc","f1","reward","score","coherence","loss_inv","bleu","rouge"),
+        energy=_kw("tokens","compute","energy","cost","gradient_updates","lr","batch_tokens"),
+        domain="ai"),
+    "Biology": Preset("Biology",
+        time=_kw("time","t","hours","days","samples"),
+        performance=_kw("viability","function","yield","recovery","signal","od","growth","fitness"),
+        energy=_kw("dose","stressor","input","energy","treatment","drug","radiation"),
+        domain="bio"),
+    "Robotics": Preset("Robotics",
+        time=_kw("t","time","cycle","episode"),
+        performance=_kw("task_success","score","stability","tracking_inv","uptime","mean_reward"),
+        energy=_kw("power","torque_int","battery_used","energy","effort","cpu_load"),
+        domain="robot"),
 
-def get_preset(name: str) -> Preset:
-    return PRESETS.get(name, DEFAULT_PRESET)
+    # --- Engineering / Ops ---
+    "Manufacturing": Preset("Manufacturing",
+        time=_kw("time","shift","batch","lot","t"),
+        performance=_kw("yield","throughput","quality","uptime","oee","scrap_inv"),
+        energy=_kw("power","energy","rework","downtime","input_cost","labor_hours"),
+        domain="mfg"),
+    "DevOps/SRE": Preset("DevOps/SRE",
+        time=_kw("time","t","minute","hour","deploy","build"),
+        performance=_kw("uptime","slo_attained","latency_inv","error_rate_inv","success_rate"),
+        energy=_kw("cpu","mem","cost","requests","writes","build_minutes"),
+        domain="sre"),
+    "Networking": Preset("Networking",
+        time=_kw("time","t","slot","interval"),
+        performance=_kw("throughput","goodput","availability","pkt_success","latency_inv"),
+        energy=_kw("tx_power","bandwidth","retries","cost","hops"),
+        domain="net"),
+    "Aerospace": Preset("Aerospace",
+        time=_kw("time","t","cycle","flight"),
+        performance=_kw("mission_success","stability","tracking_inv","fault_free_time"),
+        energy=_kw("fuel","power","thrust_effort","thermal_load"),
+        domain="aero"),
+    "Materials": Preset("Materials",
+        time=_kw("time","cycle","step"),
+        performance=_kw("strength","conductivity","hardness","toughness","yield_strength"),
+        energy=_kw("temp","load","stress","dose","cycles"),
+        domain="mat"),
+
+    # --- Science / Lab ---
+    "Chemistry": Preset("Chemistry",
+        time=_kw("time","t","minutes","hours"),
+        performance=_kw("yield","purity","selectivity","signal","conversion"),
+        energy=_kw("reagent","dose","temp","pressure","energy"),
+        domain="chem"),
+    "Physics Lab": Preset("Physics Lab",
+        time=_kw("time","t","run","shot"),
+        performance=_kw("signal","stability","coherence","snr","resolution"),
+        energy=_kw("power","fluence","current","shots","cost"),
+        domain="phys"),
+    "Neuroscience": Preset("Neuroscience",
+        time=_kw("time","trial","t"),
+        performance=_kw("accuracy","auc","firing_sync","connectivity","score"),
+        energy=_kw("stimulus","dose","current","effort","trials"),
+        domain="neuro"),
+    "Clinical Trials": Preset("Clinical Trials",
+        time=_kw("visit","day","week","time"),
+        performance=_kw("response","remission","score","survival_inv","function"),
+        energy=_kw("dose","sessions","adherence","cost","exposure"),
+        domain="ct"),
+    "Healthcare": Preset("Healthcare",
+        time=_kw("time","visit","day","t"),
+        performance=_kw("recovery","response","function","score","readmit_inv"),
+        energy=_kw("dose","sessions","cost","effort","treatment"),
+        domain="hc"),
+    "Epidemiology/Public Health": Preset("Epidemiology/Public Health",
+        time=_kw("date","week","time"),
+        performance=_kw("rt_inv","incidence_inv","coverage","response_rate"),
+        energy=_kw("doses","tests","cost","interventions"),
+        domain="epi"),
+
+    # --- Energy / Industry / Infra ---
+    "Energy/Grid": Preset("Energy/Grid",
+        time=_kw("time","interval","t"),
+        performance=_kw("uptime","availability","efficiency","output","losses_inv"),
+        energy=_kw("load","consumption","cost","curtailment","effort"),
+        domain="grid"),
+    "Battery/EV": Preset("Battery/EV",
+        time=_kw("cycle","time","t"),
+        performance=_kw("capacity_retained","soh","range","efficiency"),
+        energy=_kw("charge","discharge","power","c_rate","temp"),
+        domain="ev"),
+    "Oil & Gas": Preset("Oil & Gas",
+        time=_kw("time","day","shift"),
+        performance=_kw("production","throughput","uptime","quality"),
+        energy=_kw("power","gas_injected","steam","cost","water_cut"),
+        domain="oag"),
+    "Water/Wastewater": Preset("Water/Wastewater",
+        time=_kw("time","day","interval"),
+        performance=_kw("removal_eff","compliance","uptime","quality"),
+        energy=_kw("flow","power","chem_dose","cost"),
+        domain="water"),
+
+    # --- Business / Data ---
+    "Finance": Preset("Finance",
+        time=_kw("date","time","t","bar","index"),
+        performance=_kw("return","pnl","sharpe","alpha","win_rate"),
+        energy=_kw("risk","drawdown","exposure","volume","cost"),
+        domain="fin"),
+    "Economics/Macro": Preset("Economics/Macro",
+        time=_kw("date","quarter","month","t"),
+        performance=_kw("growth","employment","inflation_inv","output"),
+        energy=_kw("spend","rates","debt","cost"),
+        domain="econ"),
+    "Marketing": Preset("Marketing",
+        time=_kw("date","week","time"),
+        performance=_kw("ctr","conv_rate","roas","retention","engagement"),
+        energy=_kw("spend","impressions","emails_sent","touches","cost"),
+        domain="mkt"),
+    "Sales/CRM": Preset("Sales/CRM",
+        time=_kw("date","stage_time","time"),
+        performance=_kw("close_rate","revenue","aov","win_rate"),
+        energy=_kw("leads","calls","emails","meetings","spend"),
+        domain="sales"),
+    "Web Analytics": Preset("Web Analytics",
+        time=_kw("date","time","t"),
+        performance=_kw("conversion","retention","latency_inv","availability"),
+        energy=_kw("traffic","requests","cost","build_minutes"),
+        domain="web"),
+    "E-commerce": Preset("E-commerce",
+        time=_kw("date","time","week"),
+        performance=_kw("gmv","orders","aov","repeat_rate"),
+        energy=_kw("ad_spend","discount","inventory","shipping_cost"),
+        domain="ecom"),
+    "Customer Support": Preset("Customer Support",
+        time=_kw("date","time","t"),
+        performance=_kw("csat","fst_inv","nps","resolution_rate"),
+        energy=_kw("tickets","agent_hours","escalations","cost"),
+        domain="cs"),
+
+    # --- Supply / Mobility ---
+    "Supply Chain": Pres
