@@ -1,160 +1,203 @@
 # app_streamlit.py
+from __future__ import annotations
+
 import io
-import math
-import pandas as pd
+import json
+import os
+from typing import Dict, Optional, Tuple
+
 import numpy as np
+import pandas as pd
 import streamlit as st
 
-from presets import PRESETS, get_preset
-from report import build_pdf
+from presets import PRESETS, Preset  # <- uses YOUR current presets.py exactly
+import core
+import report as report_mod
 
-st.set_page_config(page_title="RYE Analyzer", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="RYE Analyzer", layout="wide")
 
+# ----------------------------
+# Helpers
+# ----------------------------
+def _find_first_present(df_cols, candidates):
+    """Return the first candidate that exists in df columns (case-insensitive)."""
+    if not candidates:
+        return None
+    cols_lower = {c.lower(): c for c in df_cols}
+    for c in candidates:
+        k = c.lower()
+        if k in cols_lower:
+            return cols_lower[k]
+    return None
+
+def _guess_columns(df: pd.DataFrame, preset: Preset) -> Tuple[Optional[str], Optional[str], Optional[str], Dict[str, float]]:
+    """Guess time / performance / energy columns using preset keyword lists."""
+    scores = {}
+    def score_list(candidates):
+        s = 0.0
+        for c in candidates:
+            if c.lower() in (x.lower() for x in df.columns):
+                s += 1.0
+        return s
+
+    t_col = _find_first_present(df.columns, preset.time)
+    p_col = _find_first_present(df.columns, preset.performance)
+    e_col = _find_first_present(df.columns, preset.energy)
+
+    scores["time"] = score_list(preset.time)
+    scores["performance"] = score_list(preset.performance)
+    scores["energy"] = score_list(preset.energy)
+
+    return t_col, p_col, e_col, scores
+
+def _read_any(upload):
+    """Read CSV/TSV by extension, otherwise try csv."""
+    if upload is None:
+        return None
+    name = upload.name.lower()
+    data = upload.read()
+    if name.endswith(".tsv"):
+        return pd.read_csv(io.BytesIO(data), sep="\t")
+    return pd.read_csv(io.BytesIO(data))
+
+def _nan_safe(a):
+    a = np.asarray(a, dtype=float)
+    a[~np.isfinite(a)] = 0.0
+    return a
+
+# ----------------------------
+# UI — Header
+# ----------------------------
 st.title("RYE Analyzer")
 st.caption("Compute Repair Yield per Energy from any time series.")
 
-# -----------------------
-# Sidebar: inputs
-# -----------------------
+# Sidebar: preset & inputs
 with st.sidebar:
-    st.header("Inputs")
+    st.subheader("Inputs")
 
-    preset_name = st.selectbox("Preset", list(PRESETS.keys()), index=1)  # Biology first
-    preset = get_preset(preset_name)
-
-    rolling_window = st.slider(
-        "Rolling window",
-        min_value=preset.min_window,
-        max_value=preset.max_window,
-        value=preset.default_window,
-        help="Size of the moving window used for the rolling RYE curve."
+    # Choose preset from YOUR dict (no default constant assumed)
+    preset_name = st.selectbox(
+        "Preset",
+        options=sorted(PRESETS.keys()),
+        index=sorted(PRESETS.keys()).index("Biology") if "Biology" in PRESETS else 0,
     )
+    preset: Preset = PRESETS[preset_name]
 
-    dataset_link = st.text_input("Zenodo DOI or dataset link (optional)", placeholder="10.5281/zenodo.xxxxx or https://...")
+    primary = st.file_uploader("Primary file", type=["csv", "tsv"])
+    comparison = st.file_uploader("Comparison file (optional)", type=["csv", "tsv"])
 
-    st.markdown("---")
-    st.write("**Upload CSV** (needs at least `performance` and `energy` columns; optional `time`, `domain`).")
-    file = st.file_uploader("Primary file", type=["csv", "tsv"], accept_multiple_files=False, label_visibility="collapsed")
+    # DOI / link for the report
+    dataset_link = st.text_input("Zenodo DOI or dataset link (optional)", value="", help="Example: 10.5281/zenodo.12345 or https://zenodo.org/record/...")
 
-# -----------------------
-# Helpers
-# -----------------------
-def _read_csv(file) -> pd.DataFrame:
-    if file is None:
-        return pd.DataFrame()
-    name = file.name.lower()
-    sep = "\t" if name.endswith(".tsv") else ","
-    return pd.read_csv(file, sep=sep)
+# Load data
+df = _read_any(primary)
+df2 = _read_any(comparison) if comparison else None
 
-def compute_rye(df: pd.DataFrame) -> pd.Series:
-    """
-    RYE = ΔR / E.
-    Here we take performance as R, compute first difference (improvement),
-    and divide by energy per step. Negative allowed.
-    """
-    if "performance" not in df.columns or "energy" not in df.columns:
-        raise ValueError("CSV must include 'performance' and 'energy' columns.")
-    perf = pd.to_numeric(df["performance"], errors="coerce").fillna(method="ffill").fillna(0.0)
-    energy = pd.to_numeric(df["energy"], errors="coerce").fillna(0.0)
-    dR = perf.diff().fillna(0.0)
-    # Avoid div-by-zero — treat 0 energy as eps
-    energy_safe = energy.replace(0, np.finfo(float).eps)
-    rye = dR / energy_safe
-    return rye.astype(float)
-
-def rolling_mean(series: pd.Series, window: int) -> pd.Series:
-    window = max(1, int(window))
-    if window > len(series):
-        window = len(series)
-    return series.rolling(window=window, min_periods=1).mean()
-
-def resilience_index(series: pd.Series) -> float:
-    # Simple stability proxy: 1 - coefficient of variation over positive values (clamped)
-    s = series.replace([np.inf, -np.inf], np.nan).dropna()
-    if len(s) < 2:
-        return 0.0
-    m = float(np.mean(np.abs(s)))
-    sd = float(np.std(s))
-    if m <= 1e-12:
-        return 0.0
-    r = 1.0 - (sd / (m + 1e-12))
-    return float(max(0.0, min(1.0, r)))
-
-# -----------------------
-# Main
-# -----------------------
-if not file:
-    st.info("Upload a CSV to begin.")
+if df is None or df.empty:
+    st.info("Upload a CSV/TSV to begin.")
     st.stop()
 
-df = _read_csv(file)
-try:
-    rye = compute_rye(df)
-except Exception as e:
-    st.error(str(e))
-    st.stop()
+# Guess columns via the chosen preset
+g_time, g_perf, g_energy, scores = _guess_columns(df, preset)
 
-rye_rolling = rolling_mean(rye, rolling_window)
+# Column selectors (pre-filled by guesses)
+st.subheader("Select columns")
+col1, col2, col3, col4 = st.columns([1,1,1,1])
 
-# Summary
-summary = {
-    "mean": float(np.mean(rye)),
-    "median": float(np.median(rye)),
-    "max": float(np.max(rye)),
-    "min": float(np.min(rye)),
-    "count": int(len(rye)),
-    "resilience": float(resilience_index(rye)),
-}
+with col1:
+    time_col = st.selectbox("Time/index", options=list(df.columns), index=list(df.columns).index(g_time) if g_time in df.columns else 0)
 
-# Metadata
-cols = list(df.columns)
-metadata = {
-    "rows": int(len(df)),
-    "preset": preset.name,
-    "columns": cols,
-    "sample_n": 100,
+with col2:
+    perf_col = st.selectbox("Performance (improves when higher)", options=list(df.columns), index=list(df.columns).index(g_perf) if g_perf in df.columns else 0)
+
+with col3:
+    energy_col = st.selectbox("Energy/effort/cost", options=list(df.columns), index=list(df.columns).index(g_energy) if g_energy in df.columns else 0)
+
+with col4:
+    roll_default = getattr(preset, "default_rolling", 10) or 10
+    roll_win = st.number_input("Rolling window", min_value=1, max_value=500, value=int(roll_default), step=1, help="Smoothing for the rolling mean of RYE")
+
+st.caption(f"Preset matcher scores — time: {scores['time']:.0f}, performance: {scores['performance']:.0f}, energy: {scores['energy']:.0f}")
+
+# Map columns and compute RYE
+mapped = core.map_columns(df, time_col, perf_col, energy_col)
+perf = _nan_safe(mapped["performance"].to_numpy())
+energy = _nan_safe(mapped["energy"].to_numpy())
+rye = core.compute_rye(perf, energy)
+rye_roll = core.rolling_mean(rye, roll_win)
+
+# Plots
+st.subheader("RYE results")
+import matplotlib.pyplot as plt
+
+fig1, ax1 = plt.subplots()
+ax1.plot(rye, label="RYE", linewidth=1.6)
+ax1.plot(rye_roll, label="RYE rolling", linewidth=1.6)
+ax1.set_xlabel("Index"); ax1.set_ylabel("RYE"); ax1.legend(); ax1.grid(True, alpha=0.3)
+st.pyplot(fig1, clear_figure=True)
+
+# Optional comparison
+if df2 is not None and not df2.empty:
+    st.markdown("**Comparison dataset**")
+    g2_time, g2_perf, g2_energy, _ = _guess_columns(df2, preset)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        time2 = st.selectbox("Time (B)", options=list(df2.columns), index=list(df2.columns).index(g2_time) if g2_time in df2.columns else 0, key="t2")
+    with c2:
+        perf2 = st.selectbox("Performance (B)", options=list(df2.columns), index=list(df2.columns).index(g2_perf) if g2_perf in df2.columns else 0, key="p2")
+    with c3:
+        energy2 = st.selectbox("Energy (B)", options=list(df2.columns), index=list(df2.columns).index(g2_energy) if g2_energy in df2.columns else 0, key="e2")
+
+    mapped2 = core.map_columns(df2, time2, perf2, energy2)
+    rye2 = core.compute_rye(mapped2["performance"].to_numpy(), mapped2["energy"].to_numpy())
+    rye2_roll = core.rolling_mean(rye2, roll_win)
+
+    fig2, ax2 = plt.subplots()
+    ax2.plot(rye_roll, label=f"{preset_name} A", linewidth=1.6)
+    ax2.plot(rye2_roll, label=f"{preset_name} B", linewidth=1.6)
+    ax2.set_xlabel("Index"); ax2.set_ylabel("RYE (rolling)"); ax2.legend(); ax2.grid(True, alpha=0.3)
+    st.pyplot(fig2, clear_figure=True)
+
+# Summary block
+summary = core.summarize(rye, rye, roll_win)
+with st.expander("Summary statistics", expanded=True):
+    st.json(summary)
+
+# Report generation
+st.subheader("Reports")
+interp = st.text_area(
+    "Interpretation (optional)",
+    value=(
+        f"Average efficiency (RYE mean) is {summary['mean']:.3f}. "
+        f"Resilience index is {summary['resilience']:.3f}. "
+        "Interpret spikes or dips in the RYE curve, map to events or interventions, and iterate TGRM loops to raise average RYE."
+    ),
+)
+
+if st.button("Generate PDF report"):
+    meta = {
+        "dataset_link": dataset_link.strip(),
+        "columns": [str(time_col), str(perf_col), str(energy_col)],
+        "domain": preset.domain or "",
+        "sample_n": 100,
+    }
+    plot_series = {"RYE": rye, "RYE rolling": rye_roll}
+    pdf_bytes = report_mod.build_pdf(
+        rye=rye,
+        summary=summary,
+        metadata=meta,
+        plot_series=plot_series,
+        interpretation=interp,
+        logo_path=None,  # supply a path if you add a logo file
+    )
+    st.download_button("Download PDF", data=pdf_bytes, file_name="rye_report.pdf", mime="application/pdf")
+
+# JSON export of analysis config (nice to keep preset + chosen columns)
+export = {
+    "preset": preset_name,
+    "columns": {"time": time_col, "performance": perf_col, "energy": energy_col},
+    "rolling_window": int(roll_win),
+    "summary": summary,
     "dataset_link": dataset_link.strip(),
 }
-
-# Layout
-left, right = st.columns([1, 1])
-with left:
-    st.subheader("Summary")
-    st.json(summary)
-with right:
-    st.subheader("Plot")
-    st.line_chart(
-        pd.DataFrame({
-            preset.series_label: rye.values,
-            preset.rolling_label: rye_rolling.values
-        })
-    )
-
-st.subheader("Reports")
-interp = (
-    f"Average efficiency (RYE mean) is {summary['mean']:.3f}. "
-    "Values vary by domain and data preparation. "
-    f"Resilience index is {summary['resilience']:.3f} — higher means steadier efficiency under fluctuation. "
-    "Use the rolling curve to spot short-term noise and trend. "
-    + preset.interpretation_hint
-).strip()
-
-if st.button("Generate PDF report", type="primary"):
-    pdf_bytes = build_pdf(
-        rye=list(rye.values),
-        summary=summary,
-        metadata=metadata,
-        plot_series={
-            preset.series_label: list(rye.values),
-            preset.rolling_label: list(rye_rolling.values),
-        },
-        interpretation=interp,
-        logo_path=None,
-        plot_title_override=preset.plot_title,
-    )
-    st.download_button(
-        "Download report PDF",
-        data=pdf_bytes,
-        file_name="rye_report.pdf",
-        mime="application/pdf",
-    )
+st.download_button("Download JSON summary", data=json.dumps(export, indent=2).encode("utf-8"), file_name="rye_summary.json", mime="application/json")
