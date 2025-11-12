@@ -2,29 +2,31 @@
 """
 Core utilities for the RYE Analyzer.
 
-This module keeps the original public functions:
+Kept (backward compatible):
   - safe_float
   - compute_rye
   - compute_rye_from_df
   - rolling_series
   - summarize_series
 
-and adds new, fully optional helpers:
+Added (optional upgrades):
   - load_table, normalize_columns, guess_numeric
-  - PRESETS (AI/Biology vocabulary)
-  - compute_rye_stepwise (adds RYE_step, RYE_cum to a DataFrame)
+  - PRESETS (AI / Biology / Robotics)
+  - compute_rye_stepwise (adds RYE_step, RYE_cum)
   - stability_zones, resilience_index
-  - batch_analyze
-  - plot_timeseries, plot_rye, plot_compare  (matplotlib, one fig per plot)
-
-Nothing existing should break; your app can adopt the new pieces incrementally.
+  - compute_resilience_index (added into summarize_series output)
+  - clip_outliers, smooth_series, safe_div
+  - append_rye_columns (returns enriched DataFrame)
+  - batch_analyze (multi-file summaries)
+  - plot_timeseries, plot_rye, plot_compare  (matplotlib, one figure per plot)
 """
 
 from __future__ import annotations
+from typing import List, Tuple, Optional, Iterable, Dict, Union
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from typing import List, Tuple, Optional
 
 
 # ---------------------------
@@ -41,7 +43,7 @@ def safe_float(x):
 
 def compute_rye(repair: np.ndarray, energy: np.ndarray) -> np.ndarray:
     """
-    Compute RYE (Repair Yield per Energy).
+    Compute RYE (Repair Yield per Energy) elementwise.
     Formula: RYE = repair / energy
     Replaces zeros or NaNs in energy to avoid divide-by-zero.
     """
@@ -52,7 +54,7 @@ def compute_rye(repair: np.ndarray, energy: np.ndarray) -> np.ndarray:
 
 
 def compute_rye_from_df(df: pd.DataFrame, repair_col: str, energy_col: str) -> np.ndarray:
-    """Compute RYE directly from a dataframe using column names."""
+    """Compute RYE directly from a DataFrame using column names."""
     r = df[repair_col].apply(safe_float).to_numpy()
     e = df[energy_col].apply(safe_float).to_numpy()
     return compute_rye(r, e)
@@ -67,17 +69,41 @@ def rolling_series(arr: np.ndarray, window: int) -> np.ndarray:
 
 
 def summarize_series(arr: np.ndarray) -> dict:
-    """Compute simple stats for a numeric array."""
+    """Compute simple stats for a numeric array, plus resilience."""
     s = pd.Series(arr, dtype=float).dropna()
     if len(s) == 0:
-        return {"mean": 0, "median": 0, "max": 0, "min": 0, "count": 0}
+        return {"mean": 0, "median": 0, "max": 0, "min": 0, "count": 0, "resilience": 0}
     return {
         "mean": float(s.mean()),
         "median": float(s.median()),
         "max": float(s.max()),
         "min": float(s.min()),
         "count": int(s.count()),
+        "resilience": compute_resilience_index(s.to_numpy()),
     }
+
+
+# ---------------------------
+# New: general helpers
+# ---------------------------
+
+def safe_div(num: Union[float, np.ndarray], den: Union[float, np.ndarray], eps: float = 1e-12):
+    """Numerically safe division."""
+    return np.asarray(num, dtype=float) / (np.asarray(den, dtype=float) + eps)
+
+
+def clip_outliers(arr: Iterable[float], lower_q: float = 0.01, upper_q: float = 0.99) -> np.ndarray:
+    """Clip values to percentile band to reduce the impact of outliers."""
+    s = pd.Series(arr, dtype=float).dropna()
+    if s.empty:
+        return np.asarray(arr, dtype=float)
+    lo, hi = s.quantile(lower_q), s.quantile(upper_q)
+    return np.clip(np.asarray(arr, dtype=float), lo, hi)
+
+
+def smooth_series(arr: Iterable[float], window: int = 5) -> np.ndarray:
+    """Simple moving average smoothing."""
+    return rolling_series(np.asarray(arr, dtype=float), max(1, int(window)))
 
 
 # ---------------------------
@@ -87,7 +113,7 @@ def summarize_series(arr: np.ndarray) -> dict:
 def load_table(file) -> pd.DataFrame:
     """
     Read CSV / TSV / XLSX into a DataFrame.
-    `file` may be a file-like object from Streamlit uploader or a path.
+    `file` may be a file-like object (Streamlit uploader) or a path string.
     """
     name = getattr(file, "name", str(file)).lower()
     if name.endswith(".csv"):
@@ -112,26 +138,37 @@ def guess_numeric(df: pd.DataFrame) -> List[str]:
 
 
 # ---------------------------
-# New: Vocabulary presets
+# New: Vocabulary presets (extendable)
 # ---------------------------
 
-PRESETS = {
+PRESETS: Dict[str, Dict[str, Dict[str, str]]] = {
     "AI": {
-        "repair_label": "Repair",
+        "repair_label": "Performance",
         "energy_label": "Energy",
         "tooltips": {
-            "Repair": "Measured improvement (accuracy, loss reduction, stability, etc.).",
+            "Performance": "Measured improvement (accuracy, loss reduction, stability, etc.).",
             "Energy": "Correction effort: steps, tokens, compute, or cost."
         }
     },
     "Biology": {
         "repair_label": "Recovery",
-        "energy_label": "Resource input",
+        "energy_label": "Effort",
         "tooltips": {
             "Recovery": "Improvement toward baseline or stability (e.g., function restored).",
-            "Resource input": "Metabolic cost, time, or resources invested."
+            "Effort": "Metabolic cost, time, or resources invested."
         }
-    }
+    },
+    "Robotics": {
+        "repair_label": "Task success",
+        "energy_label": "Power",
+        "tooltips": {
+            "Task success": "Improvement toward nominal behavior (success rate, error reduction, uptime, MTTR).",
+            "Power": "Electrical/actuation energy, battery draw, or equivalent effort units."
+        }
+    },
+    # Examples to extend later:
+    # "Economics": {"repair_label":"Productivity","energy_label":"Cost","tooltips": {...}}
+    # "Medicine":  {"repair_label":"Healing","energy_label":"Treatment effort","tooltips": {...}}
 }
 
 
@@ -150,17 +187,19 @@ def compute_rye_stepwise(
     Adds two columns to `df`:
       - RYE_step: Δrepair / Δenergy between consecutive rows
       - RYE_cum : (repair - repair0) / (energy - energy0)
-    Safe against divide-by-zero via small epsilon.
     """
     eps = 1e-12
-    dR = pd.to_numeric(df[repair_col], errors="coerce").diff()
-    dE = pd.to_numeric(df[energy_col], errors="coerce").diff().clip(lower=eps)
+    r = pd.to_numeric(df[repair_col], errors="coerce")
+    e = pd.to_numeric(df[energy_col], errors="coerce")
+
+    dR = r.diff()
+    dE = e.diff().clip(lower=eps)
     df[out_step] = dR / dE
 
-    R0 = pd.to_numeric(df[repair_col], errors="coerce").iloc[0]
-    E0 = pd.to_numeric(df[energy_col], errors="coerce").iloc[0]
-    num = pd.to_numeric(df[repair_col], errors="coerce") - R0
-    den = (pd.to_numeric(df[energy_col], errors="coerce") - E0).replace(0, eps)
+    R0 = r.iloc[0]
+    E0 = e.iloc[0]
+    num = r - R0
+    den = (e - E0).replace(0, eps)
     df[out_cum] = num / den
     return df
 
@@ -172,7 +211,7 @@ def compute_rye_stepwise(
 def stability_zones(series: pd.Series, lower: float, upper: float) -> List[Tuple[int, int]]:
     """
     Return index spans where `series` stays within [lower, upper].
-    Example output: [(10, 25), (40, 57)]
+    Example: [(10, 25), (40, 57)]
     """
     inside = series.between(lower, upper)
     spans, start = [], None
@@ -197,6 +236,35 @@ def resilience_index(series: pd.Series, target: float, pct: float = 0.95) -> Opt
     return int(hits.index[0]) if len(hits) else None
 
 
+def compute_resilience_index(arr: Iterable[float]) -> float:
+    """
+    Simple stability/resilience index for an array.
+    1.0 = perfectly stable; lower values indicate more volatility relative to mean level.
+    """
+    arr = np.asarray(arr, dtype=float)
+    s = pd.Series(arr).dropna()
+    if len(s) == 0:
+        return 0.0
+    mean = s.mean()
+    std = s.std()
+    if mean == 0:
+        return 0.0
+    return float(max(0.0, 1.0 - (std / (abs(mean) + 1e-8))))
+
+
+# ---------------------------
+# New: Enrichment helpers
+# ---------------------------
+
+def append_rye_columns(df: pd.DataFrame, repair_col: str, energy_col: str,
+                       out_step: str = "RYE_step", out_cum: str = "RYE_cum") -> pd.DataFrame:
+    """
+    Returns a copy of df with RYE_step and RYE_cum added (non-destructive).
+    """
+    d = df.copy()
+    return compute_rye_stepwise(d, repair_col, energy_col, out_step=out_step, out_cum=out_cum)
+
+
 # ---------------------------
 # New: Batch comparison
 # ---------------------------
@@ -213,13 +281,14 @@ def batch_analyze(files, repair_col: str, energy_col: str) -> pd.DataFrame:
         rows.append({
             "file": getattr(f, "name", "dataset"),
             "final_RYE_cum": float(df["RYE_cum"].iloc[-1]) if len(df) else np.nan,
-            "mean_RYE_step": float(pd.to_numeric(df["RYE_step"], errors="coerce").mean())
+            "mean_RYE_step": float(pd.to_numeric(df["RYE_step"], errors="coerce").mean()),
+            "rows": int(len(df)),
         })
     return pd.DataFrame(rows)
 
 
 # ---------------------------
-# New: Lightweight plots (matplotlib, no seaborn, one fig per plot)
+# New: Lightweight plots (matplotlib; one fig per plot; no seaborn)
 # ---------------------------
 
 def plot_timeseries(df: pd.DataFrame, cols: List[str]):
@@ -252,3 +321,14 @@ def plot_compare(dfs: List[pd.DataFrame], labels: List[str], cum_col: str = "RYE
     ax.legend()
     fig.tight_layout()
     return fig
+
+def plot_compare(dfs: List[pd.DataFrame], labels: List[str], cum_col: str = "RYE_cum"):
+    fig, ax = plt.subplots()
+    for d, l in zip(dfs, labels):
+        ax.plot(d.index, d[cum_col], label=l)
+    ax.set_xlabel("Index")
+    ax.set_ylabel(cum_col)
+    ax.set_title("Comparison")
+    ax.legend()
+    fig.tight_layout()
+    return figun 
