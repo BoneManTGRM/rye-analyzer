@@ -1,18 +1,30 @@
+# Core app dependencies
 streamlit>=1.37.0
 pandas>=2.0.3
 numpy>=1.24.4
 plotly>=5.18.0
 matplotlib>=3.8.0
 
-# PDF generation (recommend fpdf2)
+# PDF generation (modern and Unicode-safe)
 fpdf2>=2.7.9
 
+# Date, time, and file I/O
 python-dateutil>=2.9.0
 openpyxl>=3.1.0
-# xlrd is only needed for legacy .xls; leave commented if you don’t need it
-# xlrd==1.2.0
-
-# optional niceties
+xlrd>=2.0.1
 requests>=2.32.0
+
+# Optional but recommended for images and caching
 pillow>=10.2.0
 watchdog>=3.0.0
+
+# Machine learning / math helpers (optional, but useful if you expand analytics)
+scipy>=1.12.0
+scikit-learn>=1.4.0
+
+# Notes:
+# - fpdf2 replaces old "fpdf" and supports Unicode & TTF fonts like DejaVuSans.
+# - xlrd 2.x reads modern XLS files (you can comment out if unused).
+# - Pillow helps Streamlit handle image previews.
+# - Watchdog stabilizes file caching for Streamlit Cloud.
+# - Ensure "report.py" exists at the root and fonts/DejaVuSans.ttf is present.
