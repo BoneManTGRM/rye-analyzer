@@ -23,17 +23,20 @@ def _latin1(s: str) -> str:
         return s
     # Map common Unicode punctuation to ASCII so we avoid "?" in the PDF
     replacements = {
-        "\u2014": "-",   # em dash —
-        "\u2013": "-",   # en dash –
-        "\u2212": "-",   # minus sign −
-        "\u2026": "...", # ellipsis …
-        "\u2018": "'",   # ‘
-        "\u2019": "'",   # ’
-        "\u201c": '"',   # “
-        "\u201d": '"',   # ”
-        "\u2192": "->",  # →
-        "\u2190": "<-",  # ←
-        "\u00a0": " ",   # non-breaking space
+        "\u2014": "-",    # em dash —
+        "\u2013": "-",    # en dash –
+        "\u2212": "-",    # minus sign −
+        "\u2026": "...",  # ellipsis …
+        "\u2018": "'",    # ‘
+        "\u2019": "'",    # ’
+        "\u201c": '"',    # “
+        "\u201d": '"',    # ”
+        "\u2192": "->",   # →
+        "\u2190": "<-",   # ←
+        "\u00a0": " ",    # non-breaking space
+        "\u2248": "~",    # ≈  (approx sign -> "~")
+        "\u2264": "<=",   # ≤
+        "\u2265": ">=",   # ≥
     }
     for k, v in replacements.items():
         s = s.replace(k, v)
