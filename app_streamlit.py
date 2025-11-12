@@ -98,6 +98,9 @@ except Exception as e1:
             )()
         }
 
+# Column alias map (if available) so we can be smart about domain fallbacks
+COLUMN_ALIASES = getattr(_core_mod, "COLUMN_ALIASES", {})
+
 # ---------------- Import core helpers (with graceful fallbacks) ----------------
 load_table = _core_mod.load_table
 normalize_columns = _core_mod.normalize_columns
@@ -438,6 +441,13 @@ def load_any(file) -> Optional[pd.DataFrame]:
 
 
 def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
+    """
+    Ensure the requested repair/energy columns exist.
+
+    We keep this strict (no silent remapping) so that compute_rye_from_df,
+    which already has its own safety logic, receives exactly what the user
+    expects.
+    """
     miss = [c for c in [repair, energy] if c not in df.columns]
     if miss:
         st.error(f"Missing columns: {', '.join(miss)}")
@@ -852,9 +862,31 @@ with tab3:
     if df1 is None:
         st.info("Upload a file to see domain splits.")
     else:
-        if col_domain not in df1.columns:
-            st.info(f"No domain column named '{col_domain}' found.")
+        # robust domain column selection
+        effective_domain_col = col_domain
+
+        if effective_domain_col not in df1.columns:
+            # 1) fall back to canonical 'domain' if present
+            if "domain" in df1.columns:
+                effective_domain_col = "domain"
+            else:
+                # 2) search through known domain aliases from core, if available
+                aliases = COLUMN_ALIASES.get("domain", [])
+                for cand in aliases:
+                    if cand in df1.columns:
+                        effective_domain_col = cand
+                        break
+
+        if effective_domain_col not in df1.columns:
+            st.info(
+                f"No suitable domain column found. Looked for '{col_domain}', 'domain', "
+                "and common alternatives like group/condition/site."
+            )
         elif ensure_columns(df1, col_repair, col_energy):
+            # update session_state if we auto-corrected the domain column name
+            if effective_domain_col != col_domain:
+                st.session_state["col_domain"] = effective_domain_col
+
             b = compute_block(df1, "primary", sim_factor, auto_roll)
             dfp = b["df"].copy()
             dfp["RYE"] = b["rye"]
@@ -864,11 +896,22 @@ with tab3:
                 title = "RYE by campaign or segment"
 
             if col_time in dfp.columns:
-                fig = px.line(dfp, x=col_time, y="RYE", color=col_domain, title=title)
+                fig = px.line(
+                    dfp,
+                    x=col_time,
+                    y="RYE",
+                    color=effective_domain_col,
+                    title=title,
+                )
             else:
-                fig = px.line(dfp, y="RYE", color=col_domain, title=title)
+                fig = px.line(
+                    dfp,
+                    y="RYE",
+                    color=effective_domain_col,
+                    title=title,
+                )
             add_stability_bands(fig)
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, use_container_width=True)
 
 # ---------- Tab 4 ----------
 with tab4:
@@ -890,7 +933,7 @@ with tab4:
                 "repair_col": col_repair,
                 "energy_col": col_energy,
                 "time_col": col_time if col_time in df1.columns else "",
-                "domain_col": col_domain if col_domain in df1.columns else "",
+                "domain_col": st.session_state.get("col_domain", ""),
                 "rolling_window": w,
                 "columns": list(df1.columns),
             }
