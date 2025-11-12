@@ -17,6 +17,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
+from pandas.errors import EmptyDataError  # added
 
 # ------------------------------
 # PRESETS
@@ -141,6 +142,9 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
 # File IO
 # ------------------------------
 def _read_text_table(text: str) -> pd.DataFrame:
+    # added guard for empty uploads
+    if not text or not text.strip():
+        raise EmptyDataError("Uploaded text file is empty.")
     first = text.splitlines()[0] if text.splitlines() else ""
     sep = "\t" if ("\t" in text and "," not in first) else ","
     return pd.read_csv(io.StringIO(text), sep=sep)
