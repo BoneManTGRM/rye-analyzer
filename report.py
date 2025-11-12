@@ -1,13 +1,13 @@
 # report.py
 # Build a compact, multi-page PDF report for RYE analyses.
-# Unicode-safe (NotoSans or DejaVuSans), clickable links, clean wrapping.
+# Unicode-safe (NotoSans/DejaVu regular only), safe links, clean wrapping.
 
 from __future__ import annotations
-import os, tempfile
+import os, io, tempfile
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 
 try:
@@ -15,35 +15,39 @@ try:
 except Exception as e:
     raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
 
-# ---------- Font handling ----------
+# -----------------------------
+# Font handling (NotoSans preferred, DejaVu fallback)
+# -----------------------------
 FONT_DIR = "fonts"
-ROOT_NOTO = "NotoSans-Regular.ttf"
-ROOT_DEJA = "DejaVuSans.ttf"
-NOTO_PATH = os.path.join(FONT_DIR, ROOT_NOTO)
-DEJAVU_PATH = os.path.join(FONT_DIR, ROOT_DEJA)
+NOTO_PATH = os.path.join(FONT_DIR, "NotoSans-Regular.ttf")
+DEJAVU_PATH = os.path.join(FONT_DIR, "DejaVuSans.ttf")
 
 UNICODE_FONT_PATH: Optional[str] = None
 UNICODE_FONT_NAME: Optional[str] = None  # set after resolution
 
+
 def _pick_local_font() -> Optional[Tuple[str, str]]:
-    for name, path in [
-        ("NotoSans", NOTO_PATH),
-        ("NotoSans", ROOT_NOTO),
-        ("DejaVu",  DEJAVU_PATH),
-        ("DejaVu",  ROOT_DEJA),
-    ]:
-        if os.path.exists(path):
-            return (name, path)
+    """Return (font_name, font_path) if a local TTF exists."""
+    if os.path.exists(NOTO_PATH):
+        return ("NotoSans", NOTO_PATH)
+    if os.path.exists(DEJAVU_PATH):
+        return ("DejaVu", DEJAVU_PATH)
     return None
 
-def _resolve_font():
+
+def _resolve_font() -> None:
+    """Set globals UNICODE_FONT_NAME / UNICODE_FONT_PATH if we can."""
     global UNICODE_FONT_NAME, UNICODE_FONT_PATH
     local = _pick_local_font()
     if local:
         UNICODE_FONT_NAME, UNICODE_FONT_PATH = local
 
-# ---------- Text utils ----------
+
+# -----------------------------
+# Text / URL utilities
+# -----------------------------
 def _strip_zero_width(s: str) -> str:
+    # Remove zero-width chars & soft hyphen that can trip encoders
     return (
         s.replace("\u200b", "")
          .replace("\u200e", "")
@@ -51,25 +55,53 @@ def _strip_zero_width(s: str) -> str:
          .replace("\xad", "")
     )
 
+
 def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
-    s = f"{txt:.3f}" if isinstance(txt, float) else str(txt)
+    """
+    Convert to string; if Unicode font is unavailable, coerce to Latin-1-safe.
+    Also strips zero-width characters.
+    """
+    if isinstance(txt, float):
+        s = f"{txt:.3f}"
+    else:
+        s = str(txt)
     s = _strip_zero_width(s)
     if unicode_ok:
         return s
+    # Fallback for core fonts (Helvetica): replace non-latin-1 glyphs
     return s.encode("latin-1", "replace").decode("latin-1")
+
 
 def _fmt_val(v: Union[str, int, float]) -> str:
     return f"{v:.3f}" if isinstance(v, float) else str(v)
 
-def _normalize_doi_or_url(val: str) -> Optional[str]:
-    if not val: return None
-    s = str(val).strip()
-    if s.startswith("10."): return f"https://doi.org/{s}"
-    if s.startswith(("http://", "https://")): return s
-    if "zenodo.org" in s and not s.startswith("http"): return f"https://{s}"
-    return s
 
-# ---------- PDF helpers ----------
+def _normalize_doi_or_url(val: str) -> Optional[str]:
+    """Accepts DOI, bare domains, or full URLs and returns a clickable URL."""
+    if not val:
+        return None
+    s = _strip_zero_width(str(val).strip())
+
+    # DOI
+    if s.startswith("10."):
+        return f"https://doi.org/{s}"
+
+    # Add scheme when missing (e.g., 'www.pickIe.com', 'zenodo.org/rec/...').
+    lowered = s.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        return s
+    if lowered.startswith("www."):
+        return f"https://{s}"
+    if "." in s and " " not in s:
+        # Looks like a bare host/path
+        return f"https://{s}"
+
+    return None
+
+
+# -----------------------------
+# PDF helpers
+# -----------------------------
 class Report(FPDF):
     """A4 portrait with margins, auto page breaks, and footer page numbers."""
     def __init__(self):
@@ -82,19 +114,18 @@ class Report(FPDF):
         try:
             _resolve_font()
             if UNICODE_FONT_PATH and os.path.exists(UNICODE_FONT_PATH):
-                # Register the same TTF for all styles so set_font(...,"B") etc. work.
-                for style in ("", "B", "I", "BI"):
-                    self.add_font(  # type: ignore[arg-type]
-                        UNICODE_FONT_NAME, style, UNICODE_FONT_PATH, uni=True
-                    )
+                # Register only the regular face; we will not request style="B"
+                self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
                 self.unicode_ok = True
-            self.alias_nb_pages()
         except Exception:
             self.unicode_ok = False  # fall back to core font
+
+        self.alias_nb_pages()
 
     def footer(self):
         self.set_y(-12)
         self.set_text_color(0, 0, 0)
+        # We avoid bold style with custom fonts (only regular is registered)
         if self.unicode_ok:
             self.set_font(UNICODE_FONT_NAME, "", 9)
         else:
@@ -105,27 +136,30 @@ class Report(FPDF):
     def content_w(self) -> float:
         return self.w - self.l_margin - self.r_margin
 
+
 def _font(pdf: Report, style: str = "", size: int = 11):
     pdf.set_text_color(0, 0, 0)
     if pdf.unicode_ok:
-        # If a style weren't registered for some reason, fall back gracefully.
-        try:
-            pdf.set_font(UNICODE_FONT_NAME, style, size)
-        except Exception:
-            pdf.set_font(UNICODE_FONT_NAME, "", size)
+        # Only regular face is available; ignore style to avoid "Undefined font"
+        pdf.set_font(UNICODE_FONT_NAME, "", size)
     else:
         pdf.set_font("Helvetica", style, size)
 
+
 def _h1(pdf: Report, text: str):
-    _font(pdf, "B", 18)
+    # Simulate bold by larger size when using custom unicode font
+    _font(pdf, "B", 18 if not pdf.unicode_ok else 19)
     pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
 
+
 def _h2(pdf: Report, text: str):
-    _font(pdf, "B", 13)
+    _font(pdf, "B", 13 if not pdf.unicode_ok else 14)
     pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
+
 
 def _body(pdf: Report, size: int = 11):
     _font(pdf, "", size)
+
 
 def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
     try:
@@ -134,34 +168,41 @@ def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0):
             y = pdf.t_margin
             pdf.image(path, x=x, y=y, w=w)
     except Exception:
+        # Logo is optional—never fail report for this
         pass
 
-def _hyperlink(pdf: Report, text: str, url: str):
+
+def _hyperlink(pdf: Report, text: str, url: Optional[str]):
+    """Print text; if url is valid, make it clickable."""
     url = (url or "").strip()
-    if not url:
-        pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L")
-        return
-    if pdf.unicode_ok:
-        pdf.set_text_color(0, 0, 200); pdf.set_font(UNICODE_FONT_NAME, "U", 11)
+    label = _sanitize(text, pdf.unicode_ok)
+    if url:
+        if pdf.unicode_ok:
+            pdf.set_text_color(0, 0, 200); pdf.set_font(UNICODE_FONT_NAME, "", 11)
+        else:
+            pdf.set_text_color(0, 0, 200); pdf.set_font("Helvetica", "U", 11)
+        pdf.multi_cell(0, 6, label, align="L", link=url)
+        pdf.set_text_color(0, 0, 0)
+        _body(pdf, 11)
     else:
-        pdf.set_text_color(0, 0, 200); pdf.set_font("Helvetica", "U", 11)
-    pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L", link=url)
-    pdf.set_text_color(0, 0, 0)
-    _body(pdf, 11)
+        _body(pdf, 11)
+        pdf.multi_cell(0, 6, label, align="L")
+
 
 def _key_val_rows(data: List[Tuple[str, Union[str, float, int]]], key_w: float, val_w: float):
-    """Print aligned key:value rows with wrapping."""
+    """Print aligned key:value rows with wrapping (keeps right edge clean)."""
     def render(pdf: Report):
         for k, v in data:
-            _font(pdf, "B", 11)
+            _font(pdf, "B", 11 if not pdf.unicode_ok else 12)
             pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
             _body(pdf, 11)
-            x0 = pdf.get_x();  # after the key cell
             pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
-            pdf.set_x(x0 - key_w)  # restore left indent for next row
     return render
 
-# ---------- Charts ----------
+
+# -----------------------------
+# Charts
+# -----------------------------
 def _add_series_plot(pdf: Report,
                      series_dict: Dict[str, Sequence[float]],
                      title: str = "Repair Yield per Energy"):
@@ -184,10 +225,15 @@ def _add_series_plot(pdf: Report,
     try:
         pdf.image(tmp.name, w=pdf.content_w)
     finally:
-        try: os.unlink(tmp.name)
-        except Exception: pass
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
-# ---------- Main builder ----------
+
+# -----------------------------
+# Main builder
+# -----------------------------
 def build_pdf(
     rye: Iterable[float],
     summary: Dict[str, Union[float, int, str]],
@@ -198,26 +244,32 @@ def build_pdf(
 ) -> bytes:
     pdf = Report()
     pdf.add_page()
+
     if logo_path:
         _add_logo(pdf, logo_path, w=22)
 
+    # Title
     _h1(pdf, "RYE Report")
     pdf.ln(1)
 
     # Dataset metadata
     _h2(pdf, "Dataset metadata")
-    key_w = 42
+    key_w = 42  # fixed key column keeps right edge clean
     val_w = pdf.content_w - key_w
 
+    # Clickable dataset link if provided in sidebar
     ds_link_raw = str(metadata.get("dataset_link", "") or "").strip()
     if ds_link_raw:
         url = _normalize_doi_or_url(ds_link_raw)
-        _hyperlink(pdf, f"Dataset link: {url}", url or "")
+        # Show what the user typed, click to normalized URL
+        _hyperlink(pdf, f"Dataset link: {url or ds_link_raw}", url or "")
 
+    # Other metadata rows (exclude special keys)
     meta_rows: List[Tuple[str, Union[str, float, int]]] = []
     skip = {"generated", "timestamp", "dataset_link", "columns", "notes", "sample_n"}
     for k, v in metadata.items():
-        if k in skip: continue
+        if k in skip:
+            continue
         meta_rows.append((str(k), _fmt_val(v)))
     if meta_rows:
         _key_val_rows(meta_rows, key_w=key_w, val_w=val_w)(pdf)
@@ -247,6 +299,7 @@ def build_pdf(
     right = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 1]
     col_w = (pdf.content_w - 5) / 2
     _body(pdf, 11)
+
     max_lines = max(len(left), len(right))
     for idx in range(max_lines):
         ltxt = left[idx] if idx < len(left) else ""
@@ -295,7 +348,5 @@ def build_pdf(
         align="L"
     )
 
-    out = pdf.output(dest="S")
-    if isinstance(out, (bytes, bytearray)):
-        return bytes(out)
-    return out.encode("latin-1")
+    # In fpdf2, output(dest="S") returns a bytearray; wrap with bytes()
+    return bytes(pdf.output(dest="S"))
