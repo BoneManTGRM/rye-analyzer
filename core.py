@@ -1,397 +1,309 @@
-# report.py
-# RYE Report generator — Unicode-safe, link-safe, and section-rich.
-# Drop-in replacement compatible with your app_streamlit.py.
+# core.py
+# Core utilities for RYE Analyzer:
+# - file loading (CSV/TSV/XLS/XLSX)
+# - column normalization
+# - robust numeric coercion
+# - RYE computation (Δperformance / energy)
+# - rolling helpers & summaries (incl. resilience)
+# - optional analytics: regimes, correlation, noise floor, bootstrap bands
+# Exposes: load_table, normalize_columns, safe_float, compute_rye_from_df,
+#          rolling_series, summarize_series, PRESETS,
+#          detect_regimes, energy_delta_performance_correlation,
+#          estimate_noise_floor, bootstrap_rolling_mean
 
 from __future__ import annotations
-import os, io, tempfile
+import io
+import math
+import re
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
+# ------------------------------
+# PRESETS
+# ------------------------------
+# If you keep a separate presets.py (your long list), we re-export it.
 try:
-    from fpdf import FPDF  # fpdf2 or classic fpdf
-except Exception as e:
-    raise RuntimeError("fpdf2 is required. Add 'fpdf2>=2.7.9' to requirements.txt") from e
+    from presets import PRESETS  # your full dict lives here
+except Exception:
+    # Minimal fallback so the app still runs if presets.py is missing
+    @dataclass(frozen=True)
+    class Preset:
+        name: str
+        time: List[str]
+        performance: List[str]
+        energy: List[str]
+        domain: Optional[str] = None
+        default_rolling: int = 10
+        tooltips: Optional[Dict[str, str]] = None
 
+    def _kw(*items):  # small helper
+        return list(dict.fromkeys([s.strip() for s in items if s]))
 
-# -----------------------------
-# Font resolution (NotoSans preferred, DejaVuSans fallback)
-# -----------------------------
-FONT_DIR = "fonts"
-NOTO_PATH = os.path.join(FONT_DIR, "NotoSans-Regular.ttf")
-DEJAVU_PATH = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+    PRESETS: Dict[str, Preset] = {
+        "AI": Preset(
+            "AI",
+            time=_kw("step", "iteration", "epoch", "t", "time"),
+            performance=_kw("accuracy", "acc", "f1", "reward", "score", "coherence", "loss_inv"),
+            energy=_kw("tokens", "compute", "energy", "cost", "gradient_updates"),
+            domain="ai",
+            default_rolling=10,
+            tooltips={"coherence": "Higher is better", "loss_inv": "1/loss style metric"},
+        ),
+        "Biology": Preset(
+            "Biology",
+            time=_kw("time", "t", "hours", "days", "samples"),
+            performance=_kw("viability", "function", "yield", "recovery", "signal", "growth", "fitness"),
+            energy=_kw("dose", "stressor", "input", "energy", "treatment", "drug", "radiation"),
+            domain="bio",
+            default_rolling=10,
+        ),
+        "Robotics": Preset(
+            "Robotics",
+            time=_kw("t", "time", "cycle", "episode"),
+            performance=_kw("task_success", "score", "stability", "tracking_inv", "uptime", "mean_reward"),
+            energy=_kw("power", "torque_int", "battery_used", "energy", "effort", "cpu_load"),
+            domain="robot",
+            default_rolling=10,
+        ),
+    }
 
-UNICODE_FONT_NAME: Optional[str] = None
-UNICODE_FONT_PATH: Optional[str] = None
+# ------------------------------
+# File IO
+# ------------------------------
+def load_table(src) -> pd.DataFrame:
+    """
+    Read CSV/TSV/XLS/XLSX from a path or a Streamlit UploadedFile/BytesIO.
+    Returns a DataFrame (may be empty).
+    """
+    # Stream/bytes?
+    if hasattr(src, "read") and not isinstance(src, (str, bytes)):
+        data = src.read()
+        name = getattr(src, "name", "upload")
+        buf = io.BytesIO(data)
+        if name.lower().endswith((".xls", ".xlsx")):
+            return pd.read_excel(buf)
+        # default: CSV/TSV sniff
+        text = data.decode("utf-8", errors="replace")
+        sep = "\t" if "\t" in text and "," not in text.splitlines()[0] else ","
+        return pd.read_csv(io.StringIO(text), sep=sep)
 
-def _resolve_font() -> None:
-    """Pick a local Unicode-capable TTF if available."""
-    global UNICODE_FONT_NAME, UNICODE_FONT_PATH
-    if os.path.exists(NOTO_PATH):
-        UNICODE_FONT_NAME, UNICODE_FONT_PATH = "NotoSans", NOTO_PATH
-    elif os.path.exists(DEJAVU_PATH):
-        UNICODE_FONT_NAME, UNICODE_FONT_PATH = "DejaVu", DEJAVU_PATH
-    else:
-        UNICODE_FONT_NAME = UNICODE_FONT_PATH = None  # will fall back to core fonts
-
-
-# -----------------------------
-# Text sanitizers & helpers
-# -----------------------------
-_ZW = ("\u200b", "\u200e", "\u200f", "\xad")  # zero-width & soft hyphen
-
-def _strip_zero_width(s: str) -> str:
-    for z in _ZW:
-        s = s.replace(z, "")
-    return s
-
-def _fmt_num(v: Union[str, int, float]) -> str:
-    if isinstance(v, float):
-        return f"{v:.3f}"
-    return str(v)
-
-def _sanitize(txt: Union[str, float, int], unicode_ok: bool) -> str:
-    """Return safe text for current font; remove zero-width characters."""
-    s = _strip_zero_width(_fmt_num(txt))
-    if unicode_ok:
-        return s
-    # Core fonts only support latin-1; protect to avoid crashes.
-    return s.encode("latin-1", "replace").decode("latin-1")
-
-def _normalize_doi_or_url(val: str) -> Optional[str]:
-    if not val:
-        return None
-    s = str(val).strip()
-    if s.startswith("10."):
-        return f"https://doi.org/{s}"
-    if s.startswith("http://") or s.startswith("https://"):
-        return s
-    if "zenodo.org" in s and not s.startswith("http"):
-        return f"https://{s}"
-    return s
-
-
-# -----------------------------
-# PDF shell
-# -----------------------------
-class Report(FPDF):
-    """A4 portrait, clean margins, page numbers."""
-    def __init__(self):
-        super().__init__(orientation="P", unit="mm", format="A4")
-        self.set_margins(12, 12, 12)
-        self.set_auto_page_break(auto=True, margin=15)
-        self.set_text_color(0, 0, 0)
-        self.unicode_ok = False
-
-        _resolve_font()
-        try:
-            if UNICODE_FONT_PATH and os.path.exists(UNICODE_FONT_PATH):
-                # Register both regular and bold “faces” for the same family name
-                self.add_font(UNICODE_FONT_NAME, "", UNICODE_FONT_PATH, uni=True)
-                # If you later add a bold TTF, call add_font(UNICODE_FONT_NAME, "B", <path>, uni=True)
-                self.unicode_ok = True
-            self.alias_nb_pages()
-        except Exception:
-            self.unicode_ok = False
-
-    @property
-    def content_w(self) -> float:
-        return self.w - self.l_margin - self.r_margin
-
-    def footer(self):
-        self.set_y(-12)
-        self.set_text_color(0, 0, 0)
-        if self.unicode_ok:
-            self.set_font(UNICODE_FONT_NAME, "", 9)
-        else:
-            self.set_font("Helvetica", "I", 9)
-        self.cell(0, 6, _sanitize(f"Page {self.page_no()}/{{nb}}", self.unicode_ok), align="R")
-
-
-def _font(pdf: Report, style: str = "", size: int = 11) -> None:
-    pdf.set_text_color(0, 0, 0)
-    if pdf.unicode_ok:
-        # We only registered the regular face; emulate bold via style if available
-        try:
-            pdf.set_font(UNICODE_FONT_NAME, style, size)
-        except Exception:
-            pdf.set_font(UNICODE_FONT_NAME, "", size)
-    else:
-        pdf.set_font("Helvetica", style, size)
-
-def _h1(pdf: Report, text: str) -> None:
-    _font(pdf, "B", 18)
-    pdf.cell(0, 10, _sanitize(text, pdf.unicode_ok), ln=1)
-
-def _h2(pdf: Report, text: str) -> None:
-    _font(pdf, "B", 13)
-    pdf.cell(0, 8, _sanitize(text, pdf.unicode_ok), ln=1)
-
-def _body(pdf: Report, size: int = 11) -> None:
-    _font(pdf, "", size)
-
-def _add_logo(pdf: Report, path: str = "logo.png", w: float = 22.0) -> None:
+    # Path-like
+    path = str(src)
+    if path.lower().endswith((".xls", ".xlsx")):
+        return pd.read_excel(path)
+    # CSV/TSV
     try:
-        if os.path.exists(path):
-            x = pdf.w - pdf.r_margin - w
-            y = pdf.t_margin
-            pdf.image(path, x=x, y=y, w=w)
+        return pd.read_csv(path)
     except Exception:
-        pass
+        return pd.read_csv(path, sep="\t")
 
-def _hyperlink(pdf: Report, label: str, url: Optional[str]) -> None:
-    """Clickable link line; robust even if unicode font is unavailable."""
-    url = (url or "").strip()
-    text = f"{label}: {url}" if url else label
-    if not url:
-        pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L")
-        return
-    pdf.set_text_color(0, 0, 200)
-    # underline if possible
-    if pdf.unicode_ok:
-        try:
-            pdf.set_font(UNICODE_FONT_NAME, "U", 11)
-        except Exception:
-            pdf.set_font(UNICODE_FONT_NAME, "", 11)
-    else:
-        pdf.set_font("Helvetica", "U", 11)
-    pdf.multi_cell(0, 6, _sanitize(text, pdf.unicode_ok), align="L", link=url)
-    pdf.set_text_color(0, 0, 0)
-    _body(pdf, 11)
-
-def _key_val_rows(rows: List[Tuple[str, Union[str, float, int]]], key_w: float, val_w: float):
-    """Wrapped key/value rows that respect the page width."""
-    def render(pdf: Report) -> None:
-        for k, v in rows:
-            _font(pdf, "B", 11)
-            pdf.cell(key_w, 6, _sanitize(k, pdf.unicode_ok), align="L")
-            _body(pdf, 11)
-            pdf.multi_cell(val_w, 6, _sanitize(v, pdf.unicode_ok), align="L")
-    return render
-
-
-# -----------------------------
-# Small plots into the PDF
-# -----------------------------
-def _add_series_plot(pdf: Report,
-                     series_dict: Dict[str, Sequence[float]],
-                     title: str = "Repair Yield per Energy") -> None:
-    fig, ax = plt.subplots(figsize=(5.8, 3.0), dpi=180)
-    for label, series in series_dict.items():
-        ax.plot(range(len(series)), list(series), label=str(label), linewidth=1.8)
-    ax.set_title(title)
-    ax.set_xlabel("Index")
-    ax.set_ylabel("RYE")
-    ax.legend(loc="best", frameon=False)
-    ax.grid(True, linewidth=0.3, alpha=0.6)
-    fig.tight_layout(pad=0.7)
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    try:
-        fig.savefig(tmp.name, format="png", bbox_inches="tight", dpi=180)
-    finally:
-        plt.close(fig)
-
-    try:
-        pdf.image(tmp.name, w=pdf.content_w)
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
-
-
-# -----------------------------
-# Main builder
-# -----------------------------
-def build_pdf(
-    rye: Iterable[float],
-    summary: Dict[str, Union[float, int, str]],
-    metadata: Dict[str, Union[str, int, float, list, dict]],
-    plot_series: Optional[Union[Dict[str, Sequence[float]], List[Dict[str, Sequence[float]]]]] = None,
-    interpretation: Optional[str] = None,
-    logo_path: Optional[str] = None,
-) -> bytes:
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build a multi-section PDF and return raw bytes.
-
-    metadata accepted keys (all optional):
-      - 'generated' | 'timestamp' : shown under title if present
-      - 'dataset_link'            : DOI or URL (clickable)
-      - 'rolling_window'          : int
-      - 'rows'                    : int
-      - 'preset', 'repair_col', 'energy_col', 'time_col', 'domain_col'
-      - 'columns'                 : list of column names
-      - 'sample_n'                : how many RYE values to print (default 100)
-      - 'notes'                   : freeform text
-      - advanced (if available): 'regimes' (list of dicts), 'correlation' (dict),
-                                 'noise_floor' (dict), 'bands' (dict with 'low','mid','high' Series)
+    Snake-case headers, strip whitespace, collapse punctuation.
     """
-    pdf = Report()
-    pdf.add_page()
-    if logo_path:
-        _add_logo(pdf, logo_path, w=22)
+    def norm(c: str) -> str:
+        s = c.strip().lower()
+        s = re.sub(r"[^\w]+", "_", s)
+        s = re.sub(r"_+", "_", s).strip("_")
+        return s or "col"
+    df = df.copy()
+    df.columns = [norm(str(c)) for c in df.columns]
+    return df
 
-    # Title & when
-    _h1(pdf, "RYE Report")
-    when = str(metadata.get("generated") or metadata.get("timestamp") or "").strip()
-    if when:
-        _body(pdf, 10)
-        pdf.cell(0, 6, _sanitize(f"Generated: {when}", pdf.unicode_ok), ln=1)
-    pdf.ln(2)
+# ------------------------------
+# Numerics
+# ------------------------------
+def safe_float(x) -> float:
+    try:
+        if x is None:
+            return float("nan")
+        if isinstance(x, (float, int, np.floating, np.integer)):
+            return float(x)
+        # handle strings like "1,234.5" or "1 234"
+        s = str(x).strip().replace(",", "")
+        return float(s)
+    except Exception:
+        return float("nan")
 
-    # Dataset metadata
-    _h2(pdf, "Dataset metadata")
-    key_w = 42
-    val_w = pdf.content_w - key_w
-    # Link first (if any)
-    raw_link = str(metadata.get("dataset_link", "") or "").strip()
-    if raw_link:
-        url = _normalize_doi_or_url(raw_link)
-        _hyperlink(pdf, "Dataset link", url)
+def _coerce_numeric(series: Iterable) -> np.ndarray:
+    arr = np.array([safe_float(v) for v in series], dtype=float)
+    return arr
 
-    skip_keys = {"generated", "timestamp", "dataset_link", "columns", "notes",
-                 "sample_n", "regimes", "correlation", "noise_floor", "bands"}
-    rows = []
-    for k, v in metadata.items():
-        if k in skip_keys:
-            continue
-        rows.append((str(k), _fmt_num(v)))
-    if rows:
-        _key_val_rows(rows, key_w=key_w, val_w=val_w)(pdf)
-    pdf.ln(2)
+# ------------------------------
+# RYE core
+# ------------------------------
+def compute_rye_from_df(
+    df: pd.DataFrame,
+    repair_col: str,
+    energy_col: str,
+    time_col: Optional[str] = None,
+) -> np.ndarray:
+    """
+    RYE per step = max(Δperformance, 0) / max(energy, eps)
+    (Protects against negative or zero energy and NaNs.)
+    """
+    perf = _coerce_numeric(df[repair_col])
+    energy = _coerce_numeric(df[energy_col])
 
-    # Summary statistics (whatever you passed in, e.g., mean/median/resilience)
-    _h2(pdf, "Summary statistics")
-    sum_rows = [(str(k), _fmt_num(v)) for k, v in summary.items()]
-    _key_val_rows(sum_rows, key_w=key_w, val_w=val_w)(pdf)
-    pdf.ln(2)
+    # Δperformance (step-to-step improvement). If decreasing, treat negative
+    # deltas as zero repair (no yield) — this matches the "repair" intuition.
+    dperf = np.diff(perf, prepend=perf[:1])
+    dperf = np.where(np.isfinite(dperf), dperf, 0.0)
+    dperf = np.maximum(dperf, 0.0)
 
-    # Plots
-    if plot_series:
-        if isinstance(plot_series, dict):
-            _add_series_plot(pdf, plot_series)
-        elif isinstance(plot_series, list):
-            for ps in plot_series:
-                if isinstance(ps, dict):
-                    _add_series_plot(pdf, ps)
-        pdf.ln(2)
+    eps = 1e-9
+    denom = np.where(np.isfinite(energy) & (energy > 0), energy, eps)
+    rye = dperf / denom
+    rye = np.where(np.isfinite(rye), rye, 0.0)
+    return rye
 
-    # Sample values (two columns)
-    n_show = int(metadata.get("sample_n", 100) or 100)
-    _h2(pdf, f"RYE sample values (first {n_show})")
-    first_n = list(rye)[:n_show]
-    left  = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 0]
-    right = [f"{i}: {v:.4f}" for i, v in enumerate(first_n) if i % 2 == 1]
-    col_w = (pdf.content_w - 5) / 2
-    _body(pdf, 11)
-    max_lines = max(len(left), len(right))
-    for idx in range(max_lines):
-        ltxt = left[idx] if idx < len(left) else ""
-        rtxt = right[idx] if idx < len(right) else ""
-        y0 = pdf.get_y(); x0 = pdf.get_x()
-        pdf.multi_cell(col_w, 6, _sanitize(ltxt, pdf.unicode_ok), align="L")
-        h_left = pdf.get_y() - y0
-        pdf.set_xy(x0 + col_w + 5, y0)
-        pdf.multi_cell(col_w, 6, _sanitize(rtxt, pdf.unicode_ok), align="L")
-        h_right = pdf.get_y() - y0
-        pdf.set_y(y0 + max(h_left, h_right))
-    pdf.ln(2)
+def rolling_series(series: Sequence[float], window: int) -> np.ndarray:
+    """
+    Simple moving average with edge-handling.
+    """
+    s = pd.Series(series, dtype=float)
+    if window <= 1:
+        return s.values
+    return s.rolling(window=window, min_periods=1, center=False).mean().values
 
-    # Optional: columns in dataset
-    cols = metadata.get("columns")
-    if isinstance(cols, (list, tuple)) and cols:
-        _h2(pdf, "Columns in dataset")
-        _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(", ".join(map(str, cols)), pdf.unicode_ok), align="L")
-        pdf.ln(2)
+def summarize_series(series: Sequence[float]) -> Dict[str, float]:
+    """
+    Mean/median/min/max/count/std and a bounded 'resilience' in [0,1].
+    Resilience ~ 1 - CV (clipped 0..1), with small-sample protection.
+    """
+    a = np.array(series, dtype=float)
+    a = a[np.isfinite(a)]
+    if a.size == 0:
+        return {"mean": 0.0, "median": 0.0, "min": 0.0, "max": 0.0, "count": 0.0, "std": 0.0, "resilience": 0.0}
+    mean = float(np.nanmean(a))
+    std = float(np.nanstd(a))
+    cv = std / (abs(mean) + 1e-9)
+    resilience = float(np.clip(1.0 - cv, 0.0, 1.0))
+    return {
+        "mean": mean,
+        "median": float(np.nanmedian(a)),
+        "min": float(np.nanmin(a)),
+        "max": float(np.nanmax(a)),
+        "count": float(a.size),
+        "std": std,
+        "resilience": resilience,
+    }
 
-    # Interpretation (auto text if not provided)
-    if interpretation:
-        interp_text = str(interpretation)
-    else:
-        mean = float(summary.get("mean", 0.0) or 0.0)
-        minv = float(summary.get("min", 0.0) or 0.0)
-        maxv = float(summary.get("max", 0.0) or 0.0)
-        resil = summary.get("resilience", None)
-        level = "high" if mean > 0.6 else ("moderate" if mean > 0.3 else "modest")
-        extra = f" Resilience index {resil:.3f} indicates stability." if isinstance(resil, (int, float)) else ""
-        interp_text = (
-            f"Average efficiency (RYE mean) is {mean:.3f}, spanning [{minv:.3f}, {maxv:.3f}]. "
-            f"Overall efficiency is {level}.{extra} "
-            "Use a rolling window to smooth short-term noise, map spikes/dips to interventions, "
-            "and iterate TGRM loops (detect → minimal fix → verify) to lift mean RYE and compress variance."
-        )
-    _h2(pdf, "Interpretation")
-    _body(pdf, 11)
-    pdf.multi_cell(0, 6, _sanitize(interp_text, pdf.unicode_ok), align="L")
-    pdf.ln(2)
+# ------------------------------
+# Optional analytics (safe fallbacks)
+# ------------------------------
+def detect_regimes(series: Sequence[float], min_len: int = 5, gap: float = 0.05) -> List[Dict[str, Union[int, str]]]:
+    """
+    Heuristic regime detector: segments where rolling mean stays within a band.
+    Returns list of {'start': i0, 'end': i1, 'label': text}.
+    """
+    x = np.array(series, dtype=float)
+    if x.size == 0:
+        return []
+    roll = rolling_series(x, max(3, min_len))
+    regimes = []
+    s = 0
+    for i in range(1, len(roll)):
+        if abs(roll[i] - roll[i-1]) > gap:
+            if i - 1 - s + 1 >= min_len:
+                mean_seg = float(np.nanmean(x[s:i]))
+                regimes.append({"start": int(s), "end": int(i - 1), "label": f"mean≈{mean_seg:.3f}"})
+            s = i
+    if len(roll) - s >= min_len:
+        mean_seg = float(np.nanmean(x[s:]))
+        regimes.append({"start": int(s), "end": int(len(roll) - 1), "label": f"mean≈{mean_seg:.3f}"})
+    return regimes
 
-    # Advanced analytics (render only if present)
-    regimes = metadata.get("regimes")
-    if isinstance(regimes, list) and regimes:
-        _h2(pdf, "Regimes (sustained zones)")
-        _body(pdf, 11)
-        for r in regimes[:200]:
-            line = f"[{int(r.get('start', 0))} – {int(r.get('end', 0))}]  {str(r.get('label',''))}"
-            pdf.multi_cell(0, 6, _sanitize(line, pdf.unicode_ok), align="L")
-        pdf.ln(2)
+def energy_delta_performance_correlation(
+    df: pd.DataFrame,
+    perf_col: str,
+    energy_col: str
+) -> Dict[str, float]:
+    """
+    Pearson & Spearman correlation between energy and Δperformance.
+    """
+    from scipy.stats import pearsonr, spearmanr  # noqa
+    perf = _coerce_numeric(df[perf_col])
+    dperf = np.diff(perf, prepend=perf[:1])
+    dperf = np.where(np.isfinite(dperf), dperf, 0.0)
 
-    corr = metadata.get("correlation")
-    if isinstance(corr, dict) and corr:
-        _h2(pdf, "Energy ↔ ΔPerformance correlation")
-        crows = []
-        if "pearson" in corr: crows.append(("Pearson", _fmt_num(corr["pearson"])))
-        if "spearman" in corr: crows.append(("Spearman", _fmt_num(corr["spearman"])))
-        if crows:
-            _key_val_rows(crows, key_w=key_w, val_w=val_w)(pdf)
-            pdf.ln(2)
+    energy = _coerce_numeric(df[energy_col])
+    m = np.isfinite(dperf) & np.isfinite(energy)
+    if m.sum() < 3:
+        return {"pearson": float("nan"), "spearman": float("nan")}
+    try:
+        pr = float(pearsonr(energy[m], dperf[m]).statistic)
+    except Exception:
+        pr = float("nan")
+    try:
+        sr = float(spearmanr(energy[m], dperf[m]).statistic)
+    except Exception:
+        sr = float("nan")
+    return {"pearson": pr, "spearman": sr}
 
-    noise = metadata.get("noise_floor")
-    if isinstance(noise, dict) and noise:
-        _h2(pdf, "Noise floor estimate")
-        nrows = []
-        for k, v in noise.items():
-            nrows.append((str(k), _fmt_num(v)))
-        _key_val_rows(nrows, key_w=key_w, val_w=val_w)(pdf)
-        pdf.ln(2)
+def estimate_noise_floor(series: Sequence[float]) -> Dict[str, float]:
+    """
+    Very simple noise floor: std of first differences and IQR.
+    """
+    a = np.array(series, dtype=float)
+    a = a[np.isfinite(a)]
+    if a.size < 3:
+        return {"diff_std": float("nan"), "iqr": float("nan")}
+    d = np.diff(a)
+    diff_std = float(np.nanstd(d))
+    q1, q3 = np.nanpercentile(a, [25, 75])
+    return {"diff_std": diff_std, "iqr": float(q3 - q1)}
 
-    bands = metadata.get("bands")
-    if isinstance(bands, dict) and set(bands.keys()) & {"low","mid","high"}:
-        _h2(pdf, "Bootstrap bands (rolling mean)")
-        # Summarize as quantiles to save space
-        def _qstat(series) -> List[Tuple[str, str]]:
-            try:
-                import numpy as _np
-                a = _np.array(series, dtype=float)
-                qs = _np.nanquantile(a, [0.1, 0.5, 0.9])
-                return [("p10", f"{qs[0]:.3f}"), ("p50", f"{qs[1]:.3f}"), ("p90", f"{qs[2]:.3f}")]
-            except Exception:
-                return []
-        for label in ("low","mid","high"):
-            if label in bands and bands[label] is not None:
-                pdf.cell(0, 6, _sanitize(f"{label}:", pdf.unicode_ok), ln=1)
-                _key_val_rows(_qstat(bands[label]), key_w=18, val_w=pdf.content_w - 18)(pdf)
-        pdf.ln(2)
+def bootstrap_rolling_mean(
+    series: Sequence[float],
+    window: int,
+    n_boot: int = 100,
+    q_low: float = 0.10,
+    q_mid: float = 0.50,
+    q_high: float = 0.90
+) -> Dict[str, List[float]]:
+    """
+    Bootstrap envelopes of the rolling mean (low/mid/high quantiles).
+    """
+    x = np.array(series, dtype=float)
+    x = np.where(np.isfinite(x), x, 0.0)
+    if x.size == 0:
+        return {"low": [], "mid": [], "high": []}
 
-    # Notes
-    notes = metadata.get("notes")
-    if isinstance(notes, str) and notes.strip():
-        _h2(pdf, "Notes")
-        _body(pdf, 11)
-        pdf.multi_cell(0, 6, _sanitize(notes, pdf.unicode_ok), align="L")
-        pdf.ln(2)
+    rolls = []
+    rng = np.random.default_rng(12345)
+    n = len(x)
+    for _ in range(max(10, n_boot)):
+        idx = rng.integers(0, n, size=n)  # bootstrap sample with replacement
+        rs = rolling_series(x[idx], max(1, window))
+        # Pad/truncate to original length
+        if len(rs) < n:
+            rs = np.pad(rs, (0, n - len(rs)), constant_values=rs[-1] if len(rs) > 0 else 0.0)
+        elif len(rs) > n:
+            rs = rs[:n]
+        rolls.append(rs)
 
-    # Footer
-    _body(pdf, 9)
-    pdf.multi_cell(
-        0, 5,
-        _sanitize("Open science by Cody Ryan Jenkins (CC BY 4.0). Metric: RYE (Repair Yield per Energy). TGRM.", pdf.unicode_ok),
-        align="L"
-    )
+    R = np.vstack(rolls)
+    low = np.nanquantile(R, q_low, axis=0)
+    mid = np.nanquantile(R, q_mid, axis=0)
+    high = np.nanquantile(R, q_high, axis=0)
+    return {"low": low.tolist(), "mid": mid.tolist(), "high": high.tolist()}
 
-    # Return bytes (fpdf2 may return bytes-like already)
-    out = pdf.output(dest="S")
-    return out if isinstance(out, (bytes, bytearray)) else str(out).encode("latin-1", errors="replace")
+# Explicit export surface for the app
+__all__ = [
+    "load_table",
+    "normalize_columns",
+    "safe_float",
+    "compute_rye_from_df",
+    "rolling_series",
+    "summarize_series",
+    "PRESETS",
+    # optional analytics
+    "detect_regimes",
+    "energy_delta_performance_correlation",
+    "estimate_noise_floor",
+    "bootstrap_rolling_mean",
+]
