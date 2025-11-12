@@ -17,8 +17,7 @@ from core import (
     compute_rye_from_df,
     rolling_series,
     safe_float,
-    summarize_series,        # may include "resilience" if you added it in core
-    # (do NOT import append_rye_columns unless it's defined in core)
+    summarize_series,        # may include "resilience" if implemented in core
 )
 
 # ---------------- PDF builder (optional) + diagnostics ----------------
@@ -51,11 +50,8 @@ def note(msg: str):
 def add_stability_bands(fig: go.Figure, y_max_hint: float | None = None):
     """Soft overlays for quick visual interpretation."""
     top = y_max_hint if y_max_hint is not None else 1.0
-    # green >= 0.6
     fig.add_hrect(y0=0.6, y1=max(0.6, top), fillcolor="green", opacity=0.08, line_width=0)
-    # yellow 0.3–0.6
     fig.add_hrect(y0=0.3, y1=0.6, fillcolor="yellow", opacity=0.08, line_width=0)
-    # red < 0.3 (extend a bit below 0 to ensure visibility)
     fig.add_hrect(y0=min(-0.5, 0.3 - 1.0), y1=0.3, fillcolor="red", opacity=0.08, line_width=0)
 
 # ---------------- Page config ----------------
@@ -66,8 +62,8 @@ st.caption("Compute Repair Yield per Energy from any time series.")
 with st.expander("What is RYE"):
     st.write(
         "Repair Yield per Energy (RYE) measures how efficiently a system converts effort or energy into successful "
-        "repair or performance gains. Higher RYE means better efficiency. Upload a dataset to compute RYE and explore "
-        "rolling windows, comparisons, and reports."
+        "repair or performance gains. Upload a dataset to compute RYE and explore rolling windows, comparisons, "
+        "and reports."
     )
 
 # ---------------- Sidebar ----------------
@@ -77,7 +73,6 @@ with st.sidebar:
     preset_name = st.selectbox("Preset", ["AI", "Biology", "Robotics"], index=1)
     preset = PRESETS.get(preset_name, PRESETS[list(PRESETS.keys())[0]])
 
-    # Optional tiny helper text from the preset tooltips
     ttips = preset.get("tooltips", {})
     if ttips:
         with st.popover("Preset tips", use_container_width=True):
@@ -119,7 +114,7 @@ with st.sidebar:
             "energy":      [1, 1, 1, 1, 1, 1.1, 1.0, 1.02, 1.05, 1.1, 1.1, 1.12, 1.09, 1.1, 1.1],
         })
         b = example.to_csv(index=False).encode("utf-8")
-        st.download_button("Save example.csv", b, file_name="example.csv", mime="text/csv")
+        st.download_button("Save example.csv", b, file_name="example.csv", mime="text/csv", key="dl-example")
 
 # ---------------- Core workers ----------------
 def load_any(file) -> pd.DataFrame | None:
@@ -148,17 +143,13 @@ def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
 def compute_block(df: pd.DataFrame, label: str, sim_mult: float) -> dict:
     df_sim = df.copy()
     if col_energy in df_sim.columns:
-        # robust multiply, coerces to float
         df_sim[col_energy] = pd.to_numeric(df_sim[col_energy], errors="coerce").apply(
             lambda x: safe_float(x) * sim_mult
         )
-
     rye = compute_rye_from_df(df_sim, repair_col=col_repair, energy_col=col_energy)
     rye_roll = rolling_series(rye, window)
-
-    summary = summarize_series(rye)          # may include "resilience" if you added it in core
+    summary = summarize_series(rye)
     summary_roll = summarize_series(rye_roll)
-
     return {
         "label": label,
         "df": df_sim,
@@ -185,14 +176,12 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
         lines.append("Efficiency is solid. Small process changes that reduce energy or boost repair should lift the mean further.")
     else:
         lines.append("Efficiency is modest. Look for high-energy/low-return segments to prune or repair.")
-
     lines.append(f"The report used a rolling window of {window} to smooth short-term noise.")
     if sim_mult != 1.0:
         if sim_mult < 1.0:
             lines.append(f"An energy down-scaling factor of {sim_mult:.2f} was simulated. RYE should increase under this scenario.")
         else:
             lines.append(f"An energy up-scaling factor of {sim_mult:.2f} was simulated. RYE may fall unless repair improved proportionally.")
-
     lines.append("Next: identify spikes or dips in the RYE curve, map them to events or interventions, and iterate TGRM loops to raise average RYE.")
     return " ".join(lines)
 
@@ -220,7 +209,6 @@ with tab1:
             st.write("Columns:")
             st.json(list(df1.columns))
 
-            # RYE line
             if col_time in df1.columns:
                 idx = df1[col_time]
                 fig = px.line(x=idx, y=rye, labels={"x": col_time, "y": "RYE"}, title="RYE")
@@ -232,7 +220,6 @@ with tab1:
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
             else:
-                # Build small DataFrames so Plotly labels are clear
                 fig = px.line(pd.DataFrame({"RYE": rye}), y="RYE", title="RYE")
                 add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
@@ -245,19 +232,23 @@ with tab1:
             section("Summary")
             st.code(json.dumps(summary, indent=2))
 
-            # Enriched table export (original df + RYE + rolling RYE)
             enriched = df1.copy()
             enriched["RYE"] = rye
             enriched[f"RYE_rolling_{window}"] = rye_roll
-            enriched_bytes = enriched.to_csv(index=False).encode("utf-8")
-            st.download_button("Download enriched CSV (with RYE)", enriched_bytes, file_name="rye_enriched.csv", mime="text/csv")
+            st.download_button(
+                "Download enriched CSV (with RYE)",
+                enriched.to_csv(index=False).encode("utf-8"),
+                file_name="rye_enriched.csv",
+                mime="text/csv",
+                key="dl-enriched",
+            )
 
-            # Plain RYE + summary exports
             csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
-            st.download_button("Download RYE series CSV", csv_bytes, file_name="rye.csv", mime="text/csv")
+            st.download_button("Download RYE series CSV", csv_bytes, file_name="rye.csv", mime="text/csv", key="dl-rye-series")
 
             json_bytes = io.BytesIO(json.dumps(summary, indent=2).encode("utf-8"))
-            st.download_button("Download summary JSON", json_bytes.getvalue(), file_name="summary.json", mime="application/json")
+            st.download_button("Download summary JSON", json_bytes.getvalue(), file_name="summary.json",
+                               mime="application/json", key="dl-summary-json")
 
 # ---------- Tab 2 ----------
 with tab2:
@@ -268,10 +259,8 @@ with tab2:
             b1 = compute_block(df1, "A", sim_factor)
             b2 = compute_block(df2, "B", sim_factor)
 
-            s1 = b1["summary"]["mean"]
-            s2 = b2["summary"]["mean"]
-            r1 = b1["summary"].get("resilience", 0)
-            r2 = b2["summary"].get("resilience", 0)
+            s1 = b1["summary"]["mean"]; s2 = b2["summary"]["mean"]
+            r1 = b1["summary"].get("resilience", 0); r2 = b2["summary"].get("resilience", 0)
             delta = (s2 - s1)
             pct = (delta / s1) * 100 if s1 != 0 else float("inf")
 
@@ -282,8 +271,7 @@ with tab2:
             colD.metric("Resilience A / B", f"{r1:.3f} / {r2:.3f}")
 
             if col_time in df1.columns and col_time in df2.columns:
-                x1 = df1[col_time]
-                x2 = df2[col_time]
+                x1 = df1[col_time]; x2 = df2[col_time]
                 fig = px.line(x=x1, y=b1["rye"], labels={"x": col_time, "y": "RYE"}, title="RYE comparison")
                 fig.add_scatter(x=x2, y=b2["rye"], mode="lines", name="B")
                 add_stability_bands(fig)
@@ -306,7 +294,6 @@ with tab2:
                 add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
 
-            # Optional: combined export (side-by-side RYE series for A and B)
             combined = pd.DataFrame({
                 "RYE_A": b1["rye"],
                 "RYE_B": b2["rye"],
@@ -317,7 +304,8 @@ with tab2:
                 "Download combined CSV (A vs B)",
                 combined.to_csv(index_label="index").encode("utf-8"),
                 file_name="rye_combined.csv",
-                mime="text/csv"
+                mime="text/csv",
+                key="dl-combined",
             )
 
 # ---------- Tab 3 ----------
@@ -337,8 +325,8 @@ with tab3:
             else:
                 fig = px.line(dfp, y="RYE", color=col_domain, title="RYE by domain")
             add_stability_bands(fig)
-            st.plotly_chart(fig, use_container_width=True)
-
+            st.plotly_chart(fig)
+            
 # ---------- Tab 4 ----------
 with tab4:
     if df1 is None:
@@ -346,9 +334,7 @@ with tab4:
     else:
         if ensure_columns(df1, col_repair, col_energy):
             block = compute_block(df1, "primary", sim_factor)
-            rye = block["rye"]
-            rye_roll = block["rye_roll"]
-            summary = block["summary"]
+            rye = block["rye"]; rye_roll = block["rye_roll"]; summary = block["summary"]
 
             st.write("Build a portable report to share with teams.")
 
@@ -360,6 +346,7 @@ with tab4:
                 "time_col": col_time if col_time in df1.columns else "",
                 "domain_col": col_domain if col_domain in df1.columns else "",
                 "rolling_window": window,
+                "columns": list(df1.columns),
             }
             if doi_or_link.strip():
                 metadata["dataset_link"] = doi_or_link.strip()
@@ -385,7 +372,7 @@ with tab4:
 
             colx, coly = st.columns(2)
             with colx:
-                if st.button("Generate PDF report", use_container_width=True):
+                if st.button("Generate PDF report", use_container_width=True, key="btn-make-pdf"):
                     if build_pdf is None:
                         st.error("PDF generator not available. Ensure report.py exists and **fpdf2** is in requirements.txt")
                     else:
@@ -402,14 +389,14 @@ with tab4:
                                 data=pdf_bytes,
                                 file_name="rye_report.pdf",
                                 mime="application/pdf",
-                                use_container_width=True,
+                                key="dl-pdf",
                             )
                         except Exception as e:
                             st.error(f"PDF generation failed: {e}")
                             st.code(traceback.format_exc(), language="text")
             with coly:
                 csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
-                st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", use_container_width=True)
+                st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv", key="dl-rye-csv")
 
 # Footer
 st.write("")
