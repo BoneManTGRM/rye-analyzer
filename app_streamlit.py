@@ -1,22 +1,24 @@
 # app_streamlit.py
-# RYE Analyzer full app with CSV TSV XLSX support and PDF reporting
+# RYE Analyzer full app with CSV/TSV/XLSX support, presets, stability bands, resilience, and PDF reporting
 
 from __future__ import annotations
 import io, json
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 # Local helpers
 from core import (
-    load_table,              # new: reads csv tsv xls xlsx
-    normalize_columns,       # new: snake cases headers
-    PRESETS,                 # new: AI and Biology labels
+    load_table,              # reads csv/tsv/xls/xlsx
+    normalize_columns,       # snake_case headers
+    PRESETS,                 # AI / Biology / Robotics labels + tooltips
     compute_rye_from_df,
     rolling_series,
     safe_float,
-    summarize_series,
+    summarize_series,        # now includes "resilience"
+    append_rye_columns,      # adds RYE_step / RYE_cum (for future use) — optional
 )
 
 try:
@@ -30,6 +32,15 @@ def section(title: str):
 
 def note(msg: str):
     st.caption(msg)
+
+def add_stability_bands(fig: go.Figure, y_max_hint: float | None = None):
+    # Visual efficiency zones (soft overlays)
+    # Green: >= 0.6, Yellow: 0.3–0.6, Red: < 0.3
+    # Use generous y extents so bands are visible regardless of data range
+    top = y_max_hint if y_max_hint is not None else 1.0
+    fig.add_hrect(y0=0.6, y1=max(0.6, top), fillcolor="green", opacity=0.08, line_width=0)
+    fig.add_hrect(y0=0.3, y1=0.6,             fillcolor="yellow", opacity=0.08, line_width=0)
+    fig.add_hrect(y0=min(-0.5, 0.3 - 1.0), y1=0.3, fillcolor="red", opacity=0.08, line_width=0)
 
 # ---------------- Page config ----------------
 st.set_page_config(page_title="RYE Analyzer", page_icon="📈", layout="wide")
@@ -48,7 +59,7 @@ with st.sidebar:
     st.header("Inputs")
 
     # Preset labels for copy only, internal column names can stay the same
-    preset_name = st.selectbox("Preset", ["AI", "Biology"], index=1)
+    preset_name = st.selectbox("Preset", ["AI", "Biology", "Robotics"], index=1)
     preset = PRESETS[preset_name]
 
     st.write("Upload one file to analyze. Optionally upload a second file to compare.")
@@ -70,6 +81,9 @@ with st.sidebar:
     sim_factor = st.slider("Multiply energy by", min_value=0.10, max_value=3.0, value=1.0, step=0.05)
 
     st.divider()
+    doi_or_link = st.text_input("Zenodo DOI or dataset link (optional)", value="")
+
+    st.divider()
     st.write("No data yet")
     if st.button("Download example CSV"):
         example = pd.DataFrame({
@@ -86,8 +100,8 @@ def load_any(file) -> pd.DataFrame | None:
     if file is None:
         return None
     try:
-        df = load_table(file)          # supports csv tsv xls xlsx
-        df = normalize_columns(df)     # snake case headers
+        df = load_table(file)          # supports csv/tsv/xls/xlsx
+        df = normalize_columns(df)     # snake_case headers
         return df
     except Exception as e:
         import traceback
@@ -111,7 +125,7 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float) -> dict:
     rye = compute_rye_from_df(df_sim, repair_col=col_repair, energy_col=col_energy)
     rye_roll = rolling_series(rye, window)
 
-    summary = summarize_series(rye)
+    summary = summarize_series(rye)          # includes "resilience"
     summary_roll = summarize_series(rye_roll)
 
     return {
@@ -127,10 +141,12 @@ def make_interpretation(summary: dict, window: int, sim_mult: float) -> str:
     mean_v = float(summary.get("mean", 0) or 0)
     max_v  = float(summary.get("max", 0) or 0)
     min_v  = float(summary.get("min", 0) or 0)
+    resil  = float(summary.get("resilience", 0) or 0)
 
     lines = []
     lines.append(f"Average efficiency (RYE mean) is {mean_v:.3f}. "
-                 f"Values typically range between {min_v:.3f} and {max_v:.3f} across the dataset.")
+                 f"Values typically range between {min_v:.3f} and {max_v:.3f}.")
+    lines.append(f"Resilience index (stability) is {resil:.3f} — higher means steadier efficiency under fluctuation.")
     if mean_v > 1.0:
         lines.append("On average, each unit of energy returned more than one unit of repair which is an excellent efficiency level.")
     elif mean_v > 0.5:
@@ -166,27 +182,46 @@ with tab1:
             rye_roll = block["rye_roll"]
             summary = block["summary"]
 
-            st.metric("RYE score mean", f"{summary['mean']:.4f}", help="Average RYE across rows")
+            colA, colB = st.columns(2)
+            colA.metric("RYE mean", f"{summary['mean']:.4f}", help="Average RYE across rows")
+            colB.metric("Resilience Index", f"{summary.get('resilience',0):.3f}", help="How stable efficiency remains under fluctuation")
+
             st.write("Columns:")
             st.json(list(df1.columns))
 
+            # RYE line
             if col_time in df1.columns:
                 idx = df1[col_time]
                 fig = px.line(x=idx, y=rye, labels={"x": col_time, "y": "RYE"}, title="RYE")
+                add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
-                fig2 = px.line(x=idx, y=rye_roll, labels={"x": col_time, "y": f"RYE rolling {window}"}, title=f"RYE rolling window {window}")
+
+                fig2 = px.line(x=idx, y=rye_roll, labels={"x": col_time, "y": f"RYE rolling {window}"},
+                               title=f"RYE rolling window {window}")
+                add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
             else:
                 fig = px.line(rye, title="RYE")
+                add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
+
                 fig2 = px.line(rye_roll, title=f"RYE rolling window {window}")
+                add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
 
             section("Summary")
             st.code(json.dumps(summary, indent=2))
 
+            # Enriched table export (original df + RYE + rolling RYE)
+            enriched = df1.copy()
+            enriched["RYE"] = rye
+            enriched[f"RYE_rolling_{window}"] = rye_roll
+            enriched_bytes = enriched.to_csv(index=False).encode("utf-8")
+            st.download_button("Download enriched CSV (with RYE)", enriched_bytes, file_name="rye_enriched.csv", mime="text/csv")
+
+            # Plain RYE + summary exports
             csv_bytes = pd.Series(rye, name="RYE").to_csv(index_label="index").encode("utf-8")
-            st.download_button("Download RYE CSV", csv_bytes, file_name="rye.csv", mime="text/csv")
+            st.download_button("Download RYE series CSV", csv_bytes, file_name="rye.csv", mime="text/csv")
 
             json_bytes = io.BytesIO(json.dumps(summary, indent=2).encode("utf-8"))
             st.download_button("Download summary JSON", json_bytes.getvalue(), file_name="summary.json", mime="application/json")
@@ -202,32 +237,54 @@ with tab2:
 
             s1 = b1["summary"]["mean"]
             s2 = b2["summary"]["mean"]
+            r1 = b1["summary"].get("resilience", 0)
+            r2 = b2["summary"].get("resilience", 0)
             delta = (s2 - s1)
             pct = (delta / s1) * 100 if s1 != 0 else float("inf")
 
-            colA, colB, colC = st.columns(3)
+            colA, colB, colC, colD = st.columns(4)
             colA.metric("Mean RYE A", f"{s1:.4f}")
             colB.metric("Mean RYE B", f"{s2:.4f}")
-            colC.metric("Delta", f"{delta:.4f}", f"{pct:.2f}%")
+            colC.metric("Δ Mean", f"{delta:.4f}", f"{pct:.2f}%")
+            colD.metric("Resilience A / B", f"{r1:.3f} / {r2:.3f}")
 
             if col_time in df1.columns and col_time in df2.columns:
                 x1 = df1[col_time]
                 x2 = df2[col_time]
                 fig = px.line(x=x1, y=b1["rye"], labels={"x": col_time, "y": "RYE"}, title="RYE comparison")
                 fig.add_scatter(x=x2, y=b2["rye"], mode="lines", name="B")
+                add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
 
-                fig2 = px.line(x=x1, y=b1["rye_roll"], labels={"x": col_time, "y": f"RYE rolling {window}"}, title=f"RYE rolling {window} comparison")
+                fig2 = px.line(x=x1, y=b1["rye_roll"], labels={"x": col_time, "y": f"RYE rolling {window}"},
+                               title=f"RYE rolling {window} comparison")
                 fig2.add_scatter(x=x2, y=b2["rye_roll"], mode="lines", name="B")
+                add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
             else:
                 fig = px.line(b1["rye"], title="RYE comparison")
                 fig.add_scatter(y=b2["rye"], mode="lines", name="B")
+                add_stability_bands(fig)
                 st.plotly_chart(fig, use_container_width=True)
 
                 fig2 = px.line(b1["rye_roll"], title=f"RYE rolling {window} comparison")
                 fig2.add_scatter(y=b2["rye_roll"], mode="lines", name="B")
+                add_stability_bands(fig2)
                 st.plotly_chart(fig2, use_container_width=True)
+
+            # Optional: combined export (side-by-side RYE series for A and B)
+            combined = pd.DataFrame({
+                "RYE_A": b1["rye"],
+                "RYE_B": b2["rye"],
+                f"RYE_A_rolling_{window}": b1["rye_roll"],
+                f"RYE_B_rolling_{window}": b2["rye_roll"],
+            })
+            st.download_button(
+                "Download combined CSV (A vs B)",
+                combined.to_csv(index_label="index").encode("utf-8"),
+                file_name="rye_combined.csv",
+                mime="text/csv"
+            )
 
 # ---------- Tab 3 ----------
 with tab3:
@@ -245,6 +302,7 @@ with tab3:
                 fig = px.line(dfp, x=col_time, y="RYE", color=col_domain, title="RYE by domain")
             else:
                 fig = px.line(dfp, y="RYE", color=col_domain, title="RYE by domain")
+            add_stability_bands(fig)
             st.plotly_chart(fig, use_container_width=True)
 
 # ---------- Tab 4 ----------
@@ -269,6 +327,9 @@ with tab4:
                 "domain_col": col_domain if col_domain in df1.columns else "",
                 "rolling_window": window,
             }
+            if doi_or_link.strip():
+                metadata["dataset_link"] = doi_or_link.strip()
+
             interp = make_interpretation(summary, window, sim_factor)
 
             colx, coly = st.columns(2)
