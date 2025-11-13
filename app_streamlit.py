@@ -244,6 +244,8 @@ if "defaults_initialized" not in st.session_state:
     st.session_state["default_col_energy"] = _first_or(
         "energy", getattr(_default_preset, "energy", ["energy"])
     )
+    # track whether we've already auto-applied inferred columns this session
+    st.session_state["auto_columns_applied"] = False
 
 # ---------------- Sidebar (inputs) ----------------
 with st.sidebar:
@@ -606,6 +608,33 @@ tab1, tab2, tab3, tab4 = st.tabs(
 
 df1 = load_any(file1)
 df2 = load_any(file2)
+
+# -------- Auto column detection once per session after primary file upload --------
+if (
+    df1 is not None
+    and _infer_columns is not None
+    and not st.session_state.get("auto_columns_applied", False)
+):
+    try:
+        guess = _infer_columns(df1, preset_name=preset_name)
+        updates: Dict[str, Any] = {}
+
+        if guess.get("time"):
+            updates["col_time"] = guess["time"]
+        if guess.get("domain"):
+            updates["col_domain"] = guess["domain"]
+        if guess.get("performance"):
+            updates["col_repair"] = guess["performance"]
+        if guess.get("energy"):
+            updates["col_energy"] = guess["energy"]
+
+        if updates:
+            st.session_state.update(updates)
+            st.session_state["auto_columns_applied"] = True
+            st.rerun()
+    except Exception:
+        # If anything goes wrong, fall back gracefully and do nothing
+        pass
 
 # ---------- Tab 1 ----------
 with tab1:
