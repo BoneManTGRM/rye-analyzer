@@ -948,6 +948,20 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                         "the least productive cycles rather than eliminating failed ones."
                     )
 
+    # 6b. Ecological and marine specific hint if preset name suggests that domain
+    preset_lower = preset_name.lower()
+    if any(key in preset_lower for key in ["marine", "ocean", "ecology", "limnology"]):
+        if language == "Español":
+            lines.append(
+                "Las oscilaciones de RYE pueden reflejar acoplamiento metabólico entre la producción primaria "
+                "y la respiración del ecosistema, así como cambios estacionales en la estabilidad del sistema."
+            )
+        else:
+            lines.append(
+                "Oscillations in RYE may reflect metabolic coupling between primary production and ecosystem "
+                "respiration, as well as seasonal shifts in system stability."
+            )
+
     # 7. Rolling window and simulation factor
     if language == "Español":
         lines.append(f"La ventana móvil de {w} puntos ayuda a suavizar el ruido de corto plazo.")
@@ -1005,6 +1019,48 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
     return " ".join(lines)
 
 
+def make_quick_summary(summary: dict, w: int, preset_name: str) -> str:
+    """
+    Short 1 to 2 sentence summary for the top of the report.
+    This is what Erika or any scientist can read in 3 seconds.
+    """
+    mean_v = float(summary.get("mean", 0) or 0)
+    resil = float(summary.get("resilience", 0) or 0)
+    preset_lower = preset_name.lower()
+    marketing_mode_local = preset_lower.startswith("marketing")
+
+    if language == "Español":
+        base = f"Eficiencia media RYE {mean_v:.2f}, resiliencia {resil:.2f}."
+        if resil < 0.1:
+            tail = " Los ciclos muestran inestabilidad clara entre periodos."
+        elif resil < 0.4:
+            tail = " La estabilidad es mixta; hay tramos donde la eficiencia cae de forma notable."
+        else:
+            tail = " La eficiencia se mantiene estable incluso cuando cambian las condiciones."
+
+        if any(key in preset_lower for key in ["marine", "ocean", "ecology", "limnology"]):
+            tail += " En contexto marino, esto puede reflejar diferencias entre estaciones o temporadas."
+
+        if marketing_mode_local:
+            tail += " Interpreta RYE como resultado por unidad de presupuesto."
+        return base + tail
+    else:
+        base = f"Average RYE efficiency {mean_v:.2f}, resilience {resil:.2f}."
+        if resil < 0.1:
+            tail = " Cycles show clear instability between periods."
+        elif resil < 0.4:
+            tail = " Stability is mixed, with stretches where efficiency drops sharply."
+        else:
+            tail = " Repair efficiency stays stable even as conditions change."
+
+        if any(key in preset_lower for key in ["marine", "ocean", "ecology", "limnology"]):
+            tail += " In a marine context this likely reflects differences between stations or seasons."
+
+        if marketing_mode_local:
+            tail += " Interpret RYE as outcome per unit of spend."
+        return base + tail
+
+
 # ---------------- Main UI ----------------
 tab1, tab2, tab3, tab4 = st.tabs(
     [
@@ -1037,7 +1093,7 @@ with tab1:
             colB.metric("Median", f"{summary.get('median', 0):.4f}")
             colC.metric(
                 "Resilience",
-                f"{summary.get('resilience', 0):.3f}" if "resilience" in summary else "–",
+                f"{summary.get('resilience', 0):.3f}" if "resilience" in summary else "-",
                 help=tr("Stability of efficiency under fluctuation (if computed)", "Estabilidad de la eficiencia frente a fluctuaciones (si se calcula)"),
             )
 
@@ -1201,7 +1257,7 @@ with tab2:
             colA.metric("Mean RYE A", f"{s1:.4f}")
             colB.metric("Mean RYE B", f"{s2:.4f}")
             colC.metric("Δ Mean", f"{delta:.4f}", f"{pct:.2f}%")
-            colD.metric("Resilience A / B", f"{r1:.3f} / {r2:.3f}" if r1 or r2 else "–")
+            colD.metric("Resilience A / B", f"{r1:.3f} / {r2:.3f}" if r1 or r2 else "-")
 
             if marketing_mode and np.isfinite(pct):
                 if delta > 0:
@@ -1363,6 +1419,11 @@ with tab4:
 
             st.write(tr("Build a portable report to share with teams.", "Genera un reporte portátil para compartir con tu equipo."))
 
+            # new quick summary on screen for fast reading
+            quick_summary = make_quick_summary(summary, w, preset_name)
+            st.subheader(tr("Quick summary", "Resumen rápido"))
+            st.write(quick_summary)
+
             domain_meta_col = ""
             effective_dom = st.session_state.get("effective_domain_col")
             if effective_dom and effective_dom in df1.columns:
@@ -1379,6 +1440,7 @@ with tab4:
                 "domain_col": domain_meta_col,
                 "rolling_window": w,
                 "columns": list(df1.columns),
+                "quick_summary": quick_summary,
             }
             if marketing_mode:
                 metadata["use_case"] = "marketing_efficiency"
@@ -1388,7 +1450,6 @@ with tab4:
                 if b.get(k) is not None:
                     metadata[k] = b[k]
 
-            # fixed here: pass sim_factor (the slider) into make_interpretation
             interp = make_interpretation(summary, w, sim_factor, preset_name)
 
             with st.expander(tr("PDF diagnostics", "Diagnóstico del PDF"), expanded=False):
