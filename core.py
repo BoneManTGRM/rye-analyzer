@@ -13,7 +13,7 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Union
+from typing import Dict, Iterable, List, Optional, Sequence, Union, Any
 
 import numpy as np
 import pandas as pd
@@ -496,7 +496,11 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "treatment_group",
         "species",
         "site",
+        "site_id",
         "station",
+        "station_id",
+        "transect_id",
+        "meadow_id",
         "reef",
         "habitat",
         # marketing / business
@@ -639,61 +643,102 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     return out
 
-def _pick_from_aliases(df_cols: List[str], candidates: List[str]) -> Optional[str]:
-    cols = [c.lower() for c in df_cols]
-    for a in candidates:
-        a = a.lower()
-        if a in cols:
-            return df_cols[cols.index(a)]
-    for a in candidates:
-        a = a.lower()
-        for i, c in enumerate(cols):
-            if a in c:
-                return df_cols[i]
+def _best_match(df_cols: Sequence[str], candidates: Sequence[str]) -> Optional[str]:
+    """
+    Best-effort match:
+      1) Exact case-insensitive match
+      2) Substring match (alias contained in column name)
+    """
+    if not df_cols or not candidates:
+        return None
+
+    df_cols_lower = {c.lower(): c for c in df_cols}
+
+    # exact
+    for cand in candidates:
+        if cand is None:
+            continue
+        key = str(cand).lower()
+        if key in df_cols_lower:
+            return df_cols_lower[key]
+
+    # substring
+    for cand in candidates:
+        if cand is None:
+            continue
+        key = str(cand).lower()
+        for col_lower, col_actual in df_cols_lower.items():
+            if key and key in col_lower:
+                return col_actual
+
     return None
 
-def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[str, Optional[str]]:
-    out = {"time": None, "performance": None, "energy": None, "domain": None}
+def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Try to guess time, domain, performance, energy columns based on:
+      1) The active preset keyword lists
+      2) Generic COLUMN_ALIASES fallbacks
+      3) Simple numeric fallbacks
+    """
     cols = list(df.columns)
-
     preset = PRESETS.get(preset_name) if preset_name and preset_name in PRESETS else None
-    if preset:
-        hints = {
-            "time": getattr(preset, "time", []),
-            "performance": getattr(preset, "performance", []),
-            "energy": getattr(preset, "energy", []),
-            "domain": [getattr(preset, "domain")] if getattr(preset, "domain", None) else [],
-        }
-        for k, cand in hints.items():
-            if cand:
-                pick = _pick_from_aliases(cols, [str(x) for x in cand if x])
-                if pick:
-                    out[k] = pick
 
-    for key in out:
-        if out[key] is None:
-            pick = _pick_from_aliases(cols, COLUMN_ALIASES.get(key, []))
-            if pick:
-                out[key] = pick
+    guesses: Dict[str, Any] = {}
 
+    # Time
+    time_candidates: List[str] = []
+    if preset is not None:
+        time_candidates.extend(getattr(preset, "time", []))
+    time_candidates.extend(COLUMN_ALIASES.get("time", []))
+    guesses["time"] = _best_match(cols, time_candidates)
+
+    # Domain
+    domain_candidates: List[str] = []
+    if preset is not None and getattr(preset, "domain", None):
+        domain_candidates.append(getattr(preset, "domain"))
+    domain_candidates.extend(COLUMN_ALIASES.get("domain", []))
+    guesses["domain"] = _best_match(cols, domain_candidates)
+
+    # Performance
+    perf_candidates: List[str] = []
+    if preset is not None:
+        perf_candidates.extend(getattr(preset, "performance", []))
+    perf_candidates.extend(COLUMN_ALIASES.get("performance", []))
+    guesses["performance"] = _best_match(cols, perf_candidates)
+
+    # Energy
+    energy_candidates: List[str] = []
+    if preset is not None:
+        energy_candidates.extend(getattr(preset, "energy", []))
+    energy_candidates.extend(COLUMN_ALIASES.get("energy", []))
+    guesses["energy"] = _best_match(cols, energy_candidates)
+
+    # Fallbacks: use numeric columns if we still have gaps
     numeric_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
-    if out["performance"] is None and numeric_cols:
-        out["performance"] = numeric_cols[0]
-    if out["energy"] is None:
-        e = [c for c in cols if "energy" in c.lower()]
-        out["energy"] = e[0] if e else (numeric_cols[1] if len(numeric_cols) > 1 else None)
-    if out["time"] is None:
-        t = [
+    if guesses.get("performance") is None and numeric_cols:
+        guesses["performance"] = numeric_cols[0]
+    if guesses.get("energy") is None:
+        if len(numeric_cols) > 1:
+            guesses["energy"] = numeric_cols[1]
+        elif numeric_cols:
+            guesses["energy"] = numeric_cols[0]
+    if guesses.get("time") is None:
+        t_like = [
             c
             for c in cols
             if any(k in c.lower() for k in ("time", "date", "epoch", "step", "iteration", "year", "season"))
         ]
-        out["time"] = t[0] if t else None
-    if out["domain"] is None:
-        d = [c for c in cols if c.lower() in COLUMN_ALIASES["domain"] or any(a in c.lower() for a in COLUMN_ALIASES["domain"])]
-        out["domain"] = d[0] if d else None
+        if t_like:
+            guesses["time"] = t_like[0]
 
-    return out
+    if guesses.get("domain") is None:
+        for cand in COLUMN_ALIASES.get("domain", []):
+            m = _best_match(cols, [cand])
+            if m:
+                guesses["domain"] = m
+                break
+
+    return guesses
 
 # ------------------------------
 # Numerics and helpers
