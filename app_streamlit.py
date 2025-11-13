@@ -533,14 +533,14 @@ with st.sidebar:
 def load_any(file) -> Optional[pd.DataFrame]:
     """
     Safe loader for user files:
-    - Rejects very large uploads (> 25 MB)
+    - Rejects very large uploads (> 200 MB) to avoid exhausting memory
     - Caps extremely large tables to 1,000,000 rows to avoid crashes
     """
     if file is None:
         return None
 
     # Basic size guard (works with Streamlit's UploadedFile objects)
-    max_size_mb = 25
+    max_size_mb = 200
     try:
         if hasattr(file, "size") and file.size and file.size > max_size_mb * 1024 * 1024:
             st.error(
