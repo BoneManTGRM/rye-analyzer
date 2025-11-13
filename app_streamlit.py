@@ -531,14 +531,52 @@ with st.sidebar:
 
 # ---------------- Core workers ----------------
 def load_any(file) -> Optional[pd.DataFrame]:
+    """
+    Safe loader for user files:
+    - Rejects very large uploads (> 25 MB)
+    - Caps extremely large tables to 1,000,000 rows to avoid crashes
+    """
     if file is None:
         return None
+
+    # Basic size guard (works with Streamlit's UploadedFile objects)
+    max_size_mb = 25
+    try:
+        if hasattr(file, "size") and file.size and file.size > max_size_mb * 1024 * 1024:
+            st.error(
+                tr(
+                    f"File too large (>{max_size_mb} MB). Please upload a smaller file.",
+                    f"Archivo demasiado grande (>{max_size_mb} MB). Sube un archivo más pequeño.",
+                )
+            )
+            return None
+    except Exception:
+        # If size check fails, just continue and let pandas/xarray handle it
+        pass
+
     try:
         df = load_table(file)
         df = normalize_columns(df)
         if df.empty:
-            st.error(tr("The file was read successfully, but it contains no rows.", "El archivo se leyó correctamente, pero no contiene filas."))
+            st.error(
+                tr(
+                    "The file was read successfully, but it contains no rows.",
+                    "El archivo se leyó correctamente, pero no contiene filas.",
+                )
+            )
             return None
+
+        # Row guard for extremely large datasets
+        max_rows = 1_000_000
+        if len(df) > max_rows:
+            st.warning(
+                tr(
+                    f"File has {len(df)} rows; only the first {max_rows} rows will be used to keep the app stable.",
+                    f"El archivo tiene {len(df)} filas; solo se usarán las primeras {max_rows} para mantener la app estable.",
+                )
+            )
+            df = df.head(max_rows)
+
         return df
     except Exception as e:
         st.error(tr(f"Could not read file. {e}", f"No se pudo leer el archivo. {e}"))
@@ -1450,7 +1488,7 @@ with tab4:
                 if b.get(k) is not None:
                     metadata[k] = b[k]
 
-            interp = make_interpretation(summary, w, sim_factor, preset_name)
+            interp = make_interpretation(summary, w, sim_mult=sim_factor, preset_name=preset_name)
 
             with st.expander(tr("PDF diagnostics", "Diagnóstico del PDF"), expanded=False):
                 if build_pdf is None:
