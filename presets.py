@@ -804,6 +804,41 @@ PRESETS: Dict[str, Preset] = {
             "Domain": "Group by campaign, channel, or audience_segment.",
         },
     ),
+
+    # New super simple preset for non-technical marketers
+    "Marketing Simple": Preset(
+        name="Marketing Simple",
+        time=_kw(
+            "date",
+            "day",
+            "week",
+            "month",
+        ),
+        performance=_kw(
+            "conversions",
+            "revenue",
+            "sales",
+            "signups",
+            "leads",
+            "purchases",
+        ),
+        energy=_kw(
+            "spend",
+            "ad_spend",
+            "budget",
+            "cost",
+            "impressions",
+            "clicks",
+        ),
+        domain="campaign",
+        default_rolling=7,
+        tooltips={
+            "Performance": "Put your result column here (conversions, sales, revenue).",
+            "Energy": "Put your effort column here (spend, budget, impressions, clicks).",
+            "Domain": "Use campaign or channel to see which lines are winners or losers.",
+        },
+    ),
+
     "Sales/CRM": Preset(
         name="Sales/CRM",
         time=_kw("date", "stage_time", "time"),
