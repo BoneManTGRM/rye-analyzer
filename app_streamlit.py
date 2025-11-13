@@ -1,5 +1,5 @@
 # app_streamlit.py
-# RYE Analyzer — rich, mobile-friendly Streamlit app with:
+# RYE Analyzer - rich, mobile-friendly Streamlit app with:
 # Multi-format ingest • Presets & tooltips • Auto column detect • Auto rolling window
 # Single / Compare / Multi-domain / Reports tabs • Diagnostics & PDF reporting
 
@@ -1323,7 +1323,7 @@ with tab3:
             # remember the effective domain col for use in reports (separate key, safe)
             st.session_state["effective_domain_col"] = effective_domain_col
 
-            b = compute_block(df1, "primary", sim_mult, auto_roll)
+            b = compute_block(df1, "primary", sim_factor, auto_roll)
             dfp = b["df"].copy()
             dfp["RYE"] = b["rye"]
 
@@ -1388,7 +1388,7 @@ with tab4:
                 if b.get(k) is not None:
                     metadata[k] = b[k]
 
-            interp = make_interpretation(summary, w, sim_mult, preset_name)
+            interp = make_interpretation(summary, w, sim_factor, preset_name)
 
             with st.expander(tr("PDF diagnostics", "Diagnóstico del PDF"), expanded=False):
                 if build_pdf is None:
