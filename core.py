@@ -358,6 +358,8 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "cohort_day",
         "year",
         "season",
+        "month",
+        "day_of_week",
     ],
     "performance": [
         "performance",
@@ -426,6 +428,21 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "trial_rate",
         "mql_rate",
         "sql_rate",
+        # extra marketing outcomes for better auto detect
+        "conversions",
+        "revenue",
+        "sales",
+        "signups",
+        "leads",
+        "purchases",
+        "orders",
+        "subscriptions",
+        "new_customers",
+        "ltv",
+        "clv",
+        "engagement_rate",
+        "bounce_rate_inv",
+        "unsub_rate_inv",
     ],
     "energy": [
         "energy",
@@ -488,6 +505,10 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "sessions",
         "visits",
         "ad_cost",
+        "reach",
+        "traffic",
+        "sms_sent",
+        "messages_sent",
     ],
     "domain": [
         "domain",
@@ -880,6 +901,8 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
             "p50": 0.0,
             "p90": 0.0,
             "iqr": 0.0,
+            "nonzero_fraction": 0.0,
+            "positive_fraction": 0.0,
         }
         if with_shape:
             base.update({"skew": 0.0, "kurtosis": 0.0})
@@ -891,18 +914,26 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
     resilience = float(np.clip(1.0 - cv, 0.0, 1.0))
     p10, p50, p90 = np.nanpercentile(a, [10, 50, 90])
     q1, q3 = np.nanpercentile(a, [25, 75])
+
+    # extra fractions used by interpretation and marketing text
+    nonzero = float(np.count_nonzero(a != 0.0))
+    positive = float(np.count_nonzero(a > 0.0))
+    total = float(a.size)
+
     out = {
         "mean": mean,
         "median": float(np.nanmedian(a)),
         "min": float(np.nanmin(a)),
         "max": float(np.nanmax(a)),
-        "count": float(a.size),
+        "count": total,
         "std": std,
         "resilience": resilience,
         "p10": float(p10),
         "p50": float(p50),
         "p90": float(p90),
         "iqr": float(q3 - q1),
+        "nonzero_fraction": nonzero / total if total > 0 else 0.0,
+        "positive_fraction": positive / total if total > 0 else 0.0,
     }
     if with_shape:
         try:
