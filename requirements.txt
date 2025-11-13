@@ -28,4 +28,3 @@ requests>=2.32.0
 pillow>=10.2.0
 watchdog>=3.0.0
 python-dateutil>=2.9.0
-
