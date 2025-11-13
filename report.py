@@ -334,7 +334,14 @@ def build_pdf(
     pdf.cell(W, 10, _latin1("RYE Analyzer Report"), ln=1)
     pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(W, 6, _latin1("Repair Yield per Energy - portable summary"), ln=1)
+
+    # Optional use_case line (e.g. "marketing_efficiency")
+    use_case = str(metadata.get("use_case", "") or "").strip()
+    if use_case:
+        pdf.cell(W, 6, _latin1(f"Repair Yield per Energy - use case: {use_case}"), ln=1)
+    else:
+        pdf.cell(W, 6, _latin1("Repair Yield per Energy - portable summary"), ln=1)
+
     _med_gap(pdf)
 
     # Quick summary headline (2 line style, preset aware)
@@ -390,8 +397,15 @@ def build_pdf(
     if metadata:
         _section_title(pdf, "Metadata", W)
         priority = [
-            "rows", "preset", "repair_col", "energy_col", "time_col",
-            "domain_col", "rolling_window", "dataset_link"
+            "rows",
+            "preset",
+            "use_case",          # added so it also appears in the metadata table
+            "repair_col",
+            "energy_col",
+            "time_col",
+            "domain_col",
+            "rolling_window",
+            "dataset_link",
         ]
         shown = set()
         for k in priority:
