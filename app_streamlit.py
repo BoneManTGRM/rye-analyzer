@@ -533,13 +533,16 @@ with st.sidebar:
 def load_any(file) -> Optional[pd.DataFrame]:
     """
     Safe loader for user files:
+    - Explicit Excel support (.xlsx, .xls) using pandas.read_excel
+    - CSV and TSV support
+    - Fallback to core.load_table for other formats
     - Rejects very large uploads (> 200 MB) to avoid exhausting memory
     - Caps extremely large tables to 1,000,000 rows to avoid crashes
     """
     if file is None:
         return None
 
-    # Basic size guard (works with Streamlit's UploadedFile objects)
+    # Basic size guard (works with Streamlit UploadedFile objects)
     max_size_mb = 200
     try:
         if hasattr(file, "size") and file.size and file.size > max_size_mb * 1024 * 1024:
@@ -551,12 +554,32 @@ def load_any(file) -> Optional[pd.DataFrame]:
             )
             return None
     except Exception:
-        # If size check fails, just continue and let pandas/xarray handle it
+        # If size check fails, just continue and let pandas or xarray handle it
         pass
 
+    filename = getattr(file, "name", "").lower()
+
     try:
-        df = load_table(file)
+        # Excel first, since that is what Erika is using
+        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+            try:
+                df = pd.read_excel(file, engine="openpyxl")
+            except Exception:
+                # Fallback if openpyxl is not available
+                df = pd.read_excel(file)
+
+        # Plain CSV and TSV as a backup path
+        elif filename.endswith(".csv"):
+            df = pd.read_csv(file)
+        elif filename.endswith(".tsv"):
+            df = pd.read_csv(file, sep="\t")
+
+        # Everything else goes through the core loader
+        else:
+            df = load_table(file)
+
         df = normalize_columns(df)
+
         if df.empty:
             st.error(
                 tr(
@@ -578,6 +601,7 @@ def load_any(file) -> Optional[pd.DataFrame]:
             df = df.head(max_rows)
 
         return df
+
     except Exception as e:
         st.error(tr(f"Could not read file. {e}", f"No se pudo leer el archivo. {e}"))
         st.code(traceback.format_exc(), language="text")
@@ -1147,6 +1171,90 @@ with tab1:
 
             st.write(tr("Columns:", "Columnas:"))
             st.json(list(df1.columns))
+
+            # Simple marketing helpers
+            if marketing_mode:
+                with st.expander(tr("Marketing helpers", "Ayudas de marketing"), expanded=False):
+                    cols = list(df1.columns)
+
+                    # choose defaults
+                    default_outcome = col_repair if col_repair in cols else (cols[0] if cols else None)
+                    if col_energy in cols:
+                        default_cost = col_energy
+                    elif len(cols) > 1:
+                        default_cost = cols[1]
+                    else:
+                        default_cost = default_outcome
+
+                    idx_outcome = cols.index(default_outcome) if default_outcome in cols else 0
+                    idx_cost = cols.index(default_cost) if default_cost in cols else 0
+
+                    outcome_col = st.selectbox(
+                        tr("Outcome column", "Columna de resultado"),
+                        cols,
+                        index=idx_outcome,
+                        key="mk_outcome_col",
+                        help=tr(
+                            "Revenue, conversions or main result.",
+                            "Ingresos, conversiones u otro resultado principal.",
+                        ),
+                    )
+                    cost_col = st.selectbox(
+                        tr("Cost column", "Columna de costo"),
+                        cols,
+                        index=idx_cost,
+                        key="mk_cost_col",
+                        help=tr(
+                            "Spend, budget, impressions or similar cost measure.",
+                            "Gasto, presupuesto, impresiones u otra medida de costo.",
+                        ),
+                    )
+
+                    outcome_series = pd.to_numeric(df1[outcome_col], errors="coerce")
+                    cost_series = pd.to_numeric(df1[cost_col], errors="coerce")
+                    total_outcome = float(outcome_series.sum())
+                    total_cost = float(cost_series.sum())
+                    roas = total_outcome / total_cost if total_cost != 0 else np.nan
+
+                    mcol1, mcol2, mcol3 = st.columns(3)
+                    mcol1.metric(tr("Total outcome", "Resultado total"), f"{total_outcome:,.2f}")
+                    mcol2.metric(tr("Total cost", "Costo total"), f"{total_cost:,.2f}")
+                    mcol3.metric(
+                        tr("ROAS (outcome per cost)", "ROAS (resultado por costo)"),
+                        f"{roas:,.3f}" if np.isfinite(roas) else "NA",
+                    )
+
+                    domain_col_for_marketing = col_domain if col_domain in df1.columns else None
+                    if domain_col_for_marketing is not None:
+                        seg_df = pd.DataFrame(
+                            {
+                                "segment": df1[domain_col_for_marketing].astype(str),
+                                "RYE": rye,
+                            }
+                        )
+                        seg_mean = seg_df.groupby("segment", dropna=False)["RYE"].mean().sort_values(ascending=False)
+
+                        st.markdown(tr("Top segments by RYE:", "Segmentos con mejor RYE:"))
+                        st.dataframe(
+                            seg_mean.head(5)
+                            .reset_index()
+                            .rename(columns={"segment": "segment", "RYE": "mean_RYE"})
+                        )
+
+                        if len(seg_mean) > 5:
+                            st.markdown(tr("Segments to repair first (lowest RYE):", "Segmentos a reparar primero (RYE más bajo):"))
+                            st.dataframe(
+                                seg_mean.tail(5)
+                                .reset_index()
+                                .rename(columns={"segment": "segment", "RYE": "mean_RYE"})
+                            )
+
+                    st.caption(
+                        tr(
+                            "Use high RYE segments as templates and reduce spend in low RYE segments until they are repaired.",
+                            "Usa los segmentos con RYE alto como plantillas y reduce el gasto en segmentos con RYE bajo hasta repararlos.",
+                        )
+                    )
 
             # RYE line(s)
             if col_time in df1.columns:
