@@ -1388,6 +1388,7 @@ with tab4:
                 if b.get(k) is not None:
                     metadata[k] = b[k]
 
+            # fixed here: pass sim_factor (the slider) into make_interpretation
             interp = make_interpretation(summary, w, sim_factor, preset_name)
 
             with st.expander(tr("PDF diagnostics", "Diagnóstico del PDF"), expanded=False):
