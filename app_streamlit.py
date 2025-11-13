@@ -1,5 +1,5 @@
 # app_streamlit.py
-# RYE Analyzer — rich, mobile-friendly Streamlit app with:
+# RYE Analyzer - rich, mobile friendly Streamlit app with:
 # Multi-format ingest • Presets & tooltips • Auto column detect • Auto rolling window
 # Single / Compare / Multi-domain / Reports tabs • Diagnostics & PDF reporting
 
@@ -244,8 +244,6 @@ if "defaults_initialized" not in st.session_state:
     st.session_state["default_col_energy"] = _first_or(
         "energy", getattr(_default_preset, "energy", ["energy"])
     )
-    # track whether we've already auto-applied inferred columns this session
-    st.session_state["auto_columns_applied"] = False
 
 # ---------------- Sidebar (inputs) ----------------
 with st.sidebar:
@@ -325,15 +323,15 @@ with st.sidebar:
                 _tmp = normalize_columns(load_table(file1))
                 guess = _infer_columns(_tmp, preset_name=preset_name)
                 st.success(f"Detected: {guess}")
-                # update defaults only (do not touch widget keys directly)
+                # update active widget values directly
                 if guess.get("time"):
-                    st.session_state["default_col_time"] = guess["time"]
+                    st.session_state["col_time"] = guess["time"]
                 if guess.get("domain"):
-                    st.session_state["default_col_domain"] = guess["domain"]
+                    st.session_state["col_domain"] = guess["domain"]
                 if guess.get("performance"):
-                    st.session_state["default_col_repair"] = guess["performance"]
+                    st.session_state["col_repair"] = guess["performance"]
                 if guess.get("energy"):
-                    st.session_state["default_col_energy"] = guess["energy"]
+                    st.session_state["col_energy"] = guess["energy"]
                 st.rerun()
             except Exception as e:
                 st.error(f"Auto-detect failed: {e}")
@@ -609,7 +607,7 @@ tab1, tab2, tab3, tab4 = st.tabs(
 df1 = load_any(file1)
 df2 = load_any(file2)
 
-# -------- Auto column detection once per session after primary file upload --------
+# Auto column detection once per session after primary file upload
 if (
     df1 is not None
     and _infer_columns is not None
@@ -631,9 +629,9 @@ if (
         if updates:
             st.session_state.update(updates)
             st.session_state["auto_columns_applied"] = True
-            st.rerun()
+            st.experimental_rerun()
     except Exception:
-        # If anything goes wrong, fall back gracefully and do nothing
+        # fall back silently
         pass
 
 # ---------- Tab 1 ----------
