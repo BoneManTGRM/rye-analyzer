@@ -262,7 +262,6 @@ if "defaults_initialized" not in st.session_state:
 # ---------------- Sidebar (inputs) ----------------
 with st.sidebar:
     # Language selector first so everything else can react
-    global language  # type: ignore  # for linters; at module level this is still global
     language = st.selectbox(
         "Language / Idioma",
         ["English", "Español"],
