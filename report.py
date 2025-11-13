@@ -1,6 +1,6 @@
 # report.py
 # Robust PDF builder for RYE Analyzer using fpdf2.
-# Keeps all sections: title -> summary -> interpretation -> metadata -> series previews.
+# Keeps all sections: title -> quick summary -> summary -> interpretation -> metadata -> series previews.
 # Tries to render compact line plots; falls back to text previews if plotting fails.
 
 from __future__ import annotations
@@ -37,20 +37,20 @@ def _latin1(s: str) -> str:
         return s
     # Map common Unicode punctuation to ASCII so we avoid "?" in the PDF
     replacements = {
-        "\u2014": "-",    # em dash —
-        "\u2013": "-",    # en dash –
-        "\u2212": "-",    # minus sign −
-        "\u2026": "...",  # ellipsis …
-        "\u2018": "'",    # ‘
-        "\u2019": "'",    # ’
-        "\u201c": '"',    # “
-        "\u201d": '"',    # ”
-        "\u2192": "->",   # →
-        "\u2190": "<-",   # ←
+        "\u2014": "-",    # em dash
+        "\u2013": "-",    # en dash
+        "\u2212": "-",    # minus sign
+        "\u2026": "...",  # ellipsis
+        "\u2018": "'",    # left single quote
+        "\u2019": "'",    # right single quote
+        "\u201c": '"',    # left double quote
+        "\u201d": '"',    # right double quote
+        "\u2192": "->",   # right arrow
+        "\u2190": "<-",   # left arrow
         "\u00a0": " ",    # non-breaking space
-        "\u2248": "~",    # ≈
-        "\u2264": "<=",   # ≤
-        "\u2265": ">=",   # ≥
+        "\u2248": "~",    # approximately
+        "\u2264": "<=",   # less or equal
+        "\u2265": ">=",   # greater or equal
     }
     for k, v in replacements.items():
         s = s.replace(k, v)
@@ -93,7 +93,7 @@ def _wrap(pdf: FPDF, text: str, w: float, line_h: float = 5.0) -> None:
 
 
 def _kv(pdf: FPDF, title: str, value: str, w: float) -> None:
-    # key/value pair, constrained to total width w, starting at left margin
+    """Key/value pair, constrained to total width w, starting at left margin."""
     pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(w * 0.3, 6, _latin1(title))
@@ -102,18 +102,18 @@ def _kv(pdf: FPDF, title: str, value: str, w: float) -> None:
 
 
 def _section_title(pdf: FPDF, title: str, w: float) -> None:
-    # always start section titles at left margin
+    """Always start section titles at left margin."""
     pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(w, 7, _latin1(title))
     pdf.ln(8)
 
 
-def _small_gap(pdf: FPDF):
+def _small_gap(pdf: FPDF) -> None:
     pdf.ln(2)
 
 
-def _med_gap(pdf: FPDF):
+def _med_gap(pdf: FPDF) -> None:
     pdf.ln(4)
 
 
@@ -239,6 +239,72 @@ def _marketing_kpis_section(pdf: FPDF, metadata: Dict[str, Any], W: float) -> No
     _med_gap(pdf)
 
 
+def _headline_from_summary(summary: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    """
+    Build a short, two-line style headline that appears near the top of the PDF.
+    It is preset-aware (generic, marketing, or marine biology).
+    """
+    preset_name = str(metadata.get("preset", "")).lower()
+    mean_v = float(summary.get("mean", 0) or 0)
+    resil = summary.get("resilience", None)
+    p10 = summary.get("p10", None)
+    p90 = summary.get("p90", None)
+
+    try:
+        resil_val = float(resil) if resil is not None else None
+    except Exception:
+        resil_val = None
+
+    # Flags
+    low_band_cross = False
+    if isinstance(p10, (int, float)) and isinstance(p90, (int, float)):
+        low_band_cross = p10 < 0.3 < p90
+
+    # Simple labels for efficiency and stability
+    if mean_v > 0.6:
+        eff_label = "high efficiency"
+    elif mean_v > 0.3:
+        eff_label = "moderate efficiency"
+    elif mean_v > 0.05:
+        eff_label = "low efficiency"
+    else:
+        eff_label = "near zero efficiency"
+
+    if resil_val is None:
+        stab_label = "stability not computed"
+    elif resil_val < 0.1:
+        stab_label = "no stable regulation"
+    elif resil_val < 0.4:
+        stab_label = "partial stability"
+    else:
+        stab_label = "strong stability"
+
+    # Preset specific text
+    if preset_name == "marketing":
+        base = f"Campaign RYE shows {eff_label} with {stab_label}."
+        if low_band_cross:
+            tail = "There are clear periods where efficiency falls into a weak band; those segments are prime targets for budget repair."
+        else:
+            tail = "Most cycles cluster in a consistent efficiency band; use high RYE segments as a guide for scaling spend."
+        return f"{base} {tail}"
+
+    if preset_name == "marine biology":
+        base = f"Marine RYE shows {eff_label} with {stab_label} across the observed seasons."
+        if low_band_cross:
+            tail = "Cycles dip through the low efficiency band, hinting at stress periods where gross primary production gains are weak for the respiratory cost."
+        else:
+            tail = "Efficiency stays in a relatively stable band, suggesting a repeatable coupling between production and respiration."
+        return f"{base} {tail}"
+
+    # Generic headline
+    base = f"RYE shows {eff_label} with {stab_label} across the dataset."
+    if low_band_cross:
+        tail = "The series crosses the low efficiency band around 0.3, which acts as an early warning for unstable repair."
+    else:
+        tail = "Most cycles stay within a narrow efficiency band, pointing to a characteristic operating regime."
+    return f"{base} {tail}"
+
+
 # --------------------- Main builder ---------------------
 def build_pdf(
     rye_series: List[float],
@@ -271,6 +337,14 @@ def build_pdf(
     pdf.cell(W, 6, _latin1("Repair Yield per Energy - portable summary"), ln=1)
     _med_gap(pdf)
 
+    # Quick summary headline (2 line style, preset aware)
+    headline = _headline_from_summary(summary, metadata)
+    if headline:
+        _section_title(pdf, "Quick summary", W)
+        pdf.set_font("Helvetica", "", 11)
+        _wrap(pdf, headline, W)
+        _med_gap(pdf)
+
     # Summary stats (grid-like listing) use 2 columns for more room
     _section_title(pdf, "Summary stats", W)
     pdf.set_font("Helvetica", "", 11)
@@ -295,6 +369,18 @@ def build_pdf(
         _wrap(pdf, interpretation, W)
     else:
         _wrap(pdf, "No interpretation supplied by the app.", W)
+
+    # Extra ecological hint for Marine Biology preset
+    preset_name = str(metadata.get("preset", "")).lower()
+    if preset_name == "marine biology":
+        extra = (
+            "In ecological terms, repeated peaks and troughs in RYE can mark coupling "
+            "between gross primary production and ecosystem respiration, or periods of "
+            "stress where metabolic cost rises faster than repair."
+        )
+        _small_gap(pdf)
+        _wrap(pdf, extra, W)
+
     _med_gap(pdf)
 
     # Marketing-specific KPIs (only if preset == "Marketing")
