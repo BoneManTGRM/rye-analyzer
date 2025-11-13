@@ -1,5 +1,5 @@
 # app_streamlit.py
-# RYE Analyzer - rich, mobile friendly Streamlit app with:
+# RYE Analyzer — rich, mobile-friendly Streamlit app with:
 # Multi-format ingest • Presets & tooltips • Auto column detect • Auto rolling window
 # Single / Compare / Multi-domain / Reports tabs • Diagnostics & PDF reporting
 
@@ -290,40 +290,55 @@ with st.sidebar:
     file1 = st.file_uploader("Primary file", type=file_types, key="file1")
     file2 = st.file_uploader("Comparison file (optional)", type=file_types, key="file2")
 
+    # Preview dataframe used only for column inference (read once here)
+    df_preview: Optional[pd.DataFrame] = None
+    if file1 is not None:
+        try:
+            df_preview = load_table(file1)
+            df_preview = normalize_columns(df_preview)
+        except Exception:
+            # soft fail; load_any will show full error later if needed
+            df_preview = None
+        # reset file pointer so load_any(file1) can read again later
+        try:
+            file1.seek(0)
+        except Exception:
+            pass
+
+    # Automatic one-time column inference after upload
+    if (
+        df_preview is not None
+        and _infer_columns is not None
+        and not st.session_state.get("auto_columns_applied", False)
+    ):
+        try:
+            guess = _infer_columns(df_preview, preset_name=preset_name)
+            if guess.get("time"):
+                st.session_state["col_time"] = guess["time"]
+            if guess.get("domain"):
+                st.session_state["col_domain"] = guess["domain"]
+            if guess.get("performance"):
+                st.session_state["col_repair"] = guess["performance"]
+            if guess.get("energy"):
+                st.session_state["col_energy"] = guess["energy"]
+            st.session_state["auto_columns_applied"] = True
+        except Exception:
+            # fail silently; manual input still works
+            pass
+
     st.divider()
     st.write("Column names in your data")
-    col_time = st.text_input(
-        "Time column (optional)",
-        value=st.session_state.get("default_col_time", "time"),
-        key="col_time",
-    )
-    col_domain = st.text_input(
-        "Domain column (optional)",
-        value=st.session_state.get("default_col_domain", "domain"),
-        key="col_domain",
-    )
-    col_repair = st.text_input(
-        "Performance/Repair column",
-        value=st.session_state.get("default_col_repair", "performance"),
-        key="col_repair",
-    )
-    col_energy = st.text_input(
-        "Energy/Effort column",
-        value=st.session_state.get("default_col_energy", "energy"),
-        key="col_energy",
-    )
 
+    # Manual auto-detect button (safe, runs before text_input widgets)
     if st.button("Auto-detect columns from data"):
         if _infer_columns is None:
             st.warning("Column inference not available (core.infer_columns missing).")
-        elif file1 is None:
+        elif df_preview is None:
             st.warning("Upload a primary file first.")
         else:
             try:
-                _tmp = normalize_columns(load_table(file1))
-                guess = _infer_columns(_tmp, preset_name=preset_name)
+                guess = _infer_columns(df_preview, preset_name=preset_name)
                 st.success(f"Detected: {guess}")
-                # update active widget values directly
                 if guess.get("time"):
                     st.session_state["col_time"] = guess["time"]
                 if guess.get("domain"):
@@ -332,10 +347,39 @@ with st.sidebar:
                     st.session_state["col_repair"] = guess["performance"]
                 if guess.get("energy"):
                     st.session_state["col_energy"] = guess["energy"]
-                st.rerun()
             except Exception as e:
                 st.error(f"Auto-detect failed: {e}")
                 st.code(traceback.format_exc(), language="text")
+
+    # Now create the widgets that read from session_state
+    col_time = st.text_input(
+        "Time column (optional)",
+        value=st.session_state.get(
+            "col_time", st.session_state.get("default_col_time", "time")
+        ),
+        key="col_time",
+    )
+    col_domain = st.text_input(
+        "Domain column (optional)",
+        value=st.session_state.get(
+            "col_domain", st.session_state.get("default_col_domain", "domain")
+        ),
+        key="col_domain",
+    )
+    col_repair = st.text_input(
+        "Performance/Repair column",
+        value=st.session_state.get(
+            "col_repair", st.session_state.get("default_col_repair", "performance")
+        ),
+        key="col_repair",
+    )
+    col_energy = st.text_input(
+        "Energy/Effort column",
+        value=st.session_state.get(
+            "col_energy", st.session_state.get("default_col_energy", "energy")
+        ),
+        key="col_energy",
+    )
 
     st.divider()
     default_window = int(getattr(preset, "default_rolling", 10) or 10)
@@ -606,33 +650,6 @@ tab1, tab2, tab3, tab4 = st.tabs(
 
 df1 = load_any(file1)
 df2 = load_any(file2)
-
-# Auto column detection once per session after primary file upload
-if (
-    df1 is not None
-    and _infer_columns is not None
-    and not st.session_state.get("auto_columns_applied", False)
-):
-    try:
-        guess = _infer_columns(df1, preset_name=preset_name)
-        updates: Dict[str, Any] = {}
-
-        if guess.get("time"):
-            updates["col_time"] = guess["time"]
-        if guess.get("domain"):
-            updates["col_domain"] = guess["domain"]
-        if guess.get("performance"):
-            updates["col_repair"] = guess["performance"]
-        if guess.get("energy"):
-            updates["col_energy"] = guess["energy"]
-
-        if updates:
-            st.session_state.update(updates)
-            st.session_state["auto_columns_applied"] = True
-            st.experimental_rerun()
-    except Exception:
-        # fall back silently
-        pass
 
 # ---------- Tab 1 ----------
 with tab1:
