@@ -632,7 +632,12 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float, auto_roll_flag:
 
 
 def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str) -> str:
-    """Turn summary stats into richer narrative (with marketing and language awareness)."""
+    """
+    Turn summary stats into a richer narrative for humans and teams.
+
+    Works in both languages and in both system and marketing presets.
+    Does not assume any particular summary keys beyond a few safe ones.
+    """
     mean_v = float(summary.get("mean", 0) or 0)
     max_v = float(summary.get("max", 0) or 0)
     min_v = float(summary.get("min", 0) or 0)
@@ -643,10 +648,17 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
     p90 = summary.get("p90", None)
     resil = float(summary.get("resilience", 0) or 0) if "resilience" in summary else None
 
+    # optional extra hints if summarize() provides them
+    nonzero_frac = summary.get("nonzero_fraction", None)
+    positive_frac = summary.get("positive_fraction", None)
+
     marketing_mode_local = preset_name.lower().startswith("marketing")
 
-    # basic variation label
-    if std_v < 0.1:
+    # variation label
+    if std_v < 0.05:
+        var_label_en = "very low"
+        var_label_es = "muy baja"
+    elif std_v < 0.1:
         var_label_en = "low"
         var_label_es = "baja"
     elif std_v < 0.25:
@@ -658,14 +670,19 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
 
     lines: list[str] = []
 
-    # Core description
+    # 1. Data volume and basic stats
     if language == "Español":
+        if count_v <= 0:
+            lines.append(
+                "No se encontraron observaciones válidas de RYE. Revisa el archivo, las columnas seleccionadas "
+                "o cualquier filtrado previo."
+            )
+            return " ".join(lines)
         lines.append(
             f"La eficiencia promedio (RYE medio) es {mean_v:.3f}, con un rango aproximado de "
-            f"[{min_v:.3f}, {max_v:.3f}]."
+            f"[{min_v:.3f}, {max_v:.3f}] en los datos analizados."
         )
-        if count_v:
-            lines.append(f"Se analizaron {int(count_v)} observaciones.")
+        lines.append(f"Se analizaron {int(count_v)} observaciones.")
         if std_v > 0 or iqr_v > 0:
             lines.append(
                 f"La variación en la eficiencia es {var_label_es} "
@@ -677,12 +694,17 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                 "según el rango del 10 al 90 por ciento."
             )
     else:
+        if count_v <= 0:
+            lines.append(
+                "No valid RYE observations were found. Check the file, the selected columns, "
+                "or any filtering applied before analysis."
+            )
+            return " ".join(lines)
         lines.append(
             f"Average efficiency (RYE mean) is {mean_v:.3f}, with an approximate range "
-            f"of [{min_v:.3f}, {max_v:.3f}]."
+            f"of [{min_v:.3f}, {max_v:.3f}] across the observed data."
         )
-        if count_v:
-            lines.append(f"Based on {int(count_v)} observations.")
+        lines.append(f"Based on {int(count_v)} observations.")
         if std_v > 0 or iqr_v > 0:
             lines.append(
                 f"Variation in efficiency is {var_label_en} "
@@ -694,71 +716,100 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                 "based on the 10th to 90th percentile range."
             )
 
-    # Resilience-focused text
+    # 2. Flat or suspicious patterns
+    span = max_v - min_v
+    near_zero_band = abs(mean_v) < 0.02 and span < 0.05 and count_v >= 10
+
+    if language == "Español":
+        if near_zero_band:
+            lines.append(
+                "El RYE parece casi plano cerca de cero. Esto puede significar que el sistema apenas está "
+                "respondiendo a la energía, que el cálculo de RYE está mal configurado o que el conjunto de "
+                "datos no contiene suficiente variación en reparación o desempeño."
+            )
+        elif span < 0.05 and abs(mean_v) > 0.1:
+            lines.append(
+                "El RYE es casi constante pero distinto de cero. El sistema opera en una banda de eficiencia "
+                "muy estable; para mejorar más, habría que cambiar la estrategia o las condiciones de entrada."
+            )
+    else:
+        if near_zero_band:
+            lines.append(
+                "RYE is almost perfectly flat around zero. This can mean the system barely reacts to energy, "
+                "that the RYE calculation is misconfigured, or that the dataset lacks meaningful variation in "
+                "repair or performance."
+            )
+        elif span < 0.05 and abs(mean_v) > 0.1:
+            lines.append(
+                "RYE is almost constant but clearly above or below zero. The system is operating in a very stable "
+                "efficiency band; meaningful improvement would likely require changing the strategy or inputs."
+            )
+
+    # 3. Resilience-focused text
     if resil is not None:
         if language == "Español":
             if resil < 0.1:
                 lines.append(
-                    "La resiliencia es prácticamente cero. Esto indica que no existe una regulación estable "
-                    "de la reparación: la eficiencia sube y baja de forma brusca y los bucles de control son "
-                    "débiles o inexistentes."
+                    "La resiliencia es prácticamente cero. Esto sugiere que no hay regulación estable de la "
+                    "reparación: la eficiencia puede saltar de picos a caídas sin una zona de control clara."
                 )
             elif resil < 0.4:
                 lines.append(
-                    "La resiliencia es intermedia. El sistema mantiene cierta estabilidad, pero todavía hay "
-                    "períodos donde la eficiencia de reparación se deteriora."
+                    "La resiliencia es intermedia. El sistema mantiene cierta estabilidad pero aparecen periodos "
+                    "claros en los que la eficiencia de reparación se degrada."
                 )
             else:
                 lines.append(
-                    "La resiliencia es alta. La eficiencia de reparación se mantiene estable incluso cuando "
-                    "la energía o las condiciones fluctúan."
+                    "La resiliencia es alta. La eficiencia de reparación se mantiene estable aunque cambie la "
+                    "energía o las condiciones, lo que indica bucles de control efectivos."
                 )
         else:
             if resil < 0.1:
                 lines.append(
-                    "Resilience is effectively zero. This shows no stable repair regulation: efficiency swings "
-                    "between strong bursts and complete dropouts, which suggests weak or missing control loops."
+                    "Resilience is effectively zero. There is no stable repair regulation; efficiency can jump "
+                    "from spikes to crashes without a clear control zone."
                 )
             elif resil < 0.4:
                 lines.append(
-                    "Resilience is moderate. The system holds some stability, but there are still periods where "
-                    "repair efficiency degrades noticeably."
+                    "Resilience is moderate. The system holds some stability, but there are distinct periods "
+                    "where repair efficiency degrades."
                 )
             else:
                 lines.append(
-                    "Resilience is high. Repair efficiency stays stable even when energy or conditions fluctuate."
+                    "Resilience is high. Repair efficiency remains stable even as energy or conditions change, "
+                    "which points to effective control loops."
                 )
 
-    # Efficiency strength interpretation
+    # 4. Efficiency strength and band interpretation
     if marketing_mode_local:
         if language == "Español":
             if mean_v > 1.0:
                 lines.append(
                     "Cada unidad de presupuesto generó más de una unidad de resultado en promedio; la campaña "
-                    "muestra una eficiencia excelente."
+                    "muestra una eficiencia sobresaliente."
                 )
             elif mean_v > 0.5:
                 lines.append(
-                    "La eficiencia es fuerte. Conviene recortar los segmentos de alto costo y bajo resultado "
-                    "para elevar aún más el RYE."
+                    "La eficiencia es fuerte. Tiene sentido recortar segmentos de alto costo y bajo resultado "
+                    "para empujar el RYE hacia arriba."
                 )
             else:
                 lines.append(
-                    "La eficiencia es modesta. Busca campañas o segmentos donde el gasto es alto pero los "
-                    "resultados son débiles para repararlos o reasignar presupuesto."
+                    "La eficiencia es modesta. Conviene localizar canales o campañas en los que el gasto es alto "
+                    "pero los resultados son débiles para repararlos o reasignar presupuesto."
                 )
         else:
             if mean_v > 1.0:
                 lines.append(
-                    "Each unit of budget returned more than one unit of outcome on average; campaign efficiency is excellent."
+                    "Each unit of budget returned more than one unit of outcome on average; campaign efficiency is outstanding."
                 )
             elif mean_v > 0.5:
                 lines.append(
-                    "Efficiency is strong. Focus on trimming high cost, low outcome segments to push RYE even higher."
+                    "Efficiency is strong. It is worth trimming high cost, low outcome segments to push RYE even higher."
                 )
             else:
                 lines.append(
-                    "Efficiency is modest. Hunt for campaigns where spend is high but outcomes are weak, then repair or reallocate."
+                    "Efficiency is modest. Focus on channels or campaigns where spend is high but outcomes are weak, then repair or reallocate."
                 )
     else:
         if language == "Español":
@@ -769,13 +820,13 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                 )
             elif mean_v > 0.5:
                 lines.append(
-                    "La eficiencia es sólida. Reducir el gasto de energía innecesario y concentrarse en las "
-                    "regiones de alto rendimiento puede elevar aún más el promedio."
+                    "La eficiencia es sólida. Reducir gastos de energía innecesarios y concentrarse en regiones "
+                    "de alto rendimiento puede elevar aún más el promedio."
                 )
             else:
                 lines.append(
-                    "La eficiencia es modesta. Conviene buscar regiones de alta energía y bajo retorno para "
-                    "podarlas o repararlas."
+                    "La eficiencia es modesta. Busca zonas donde la energía invertida es alta pero el retorno "
+                    "de reparación es bajo para podarlas o rediseñar las intervenciones."
                 )
         else:
             if mean_v > 1.0:
@@ -784,63 +835,171 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                 )
             elif mean_v > 0.5:
                 lines.append(
-                    "Efficiency is solid. Reducing unnecessary energy use and focusing on high-yield regions can lift the mean further."
+                    "Efficiency is solid. Reducing unnecessary energy use and focusing on high yield regions can lift the mean further."
                 )
             else:
                 lines.append(
-                    "Efficiency is modest. Hunt for high energy and low return regions to prune or repair."
+                    "Efficiency is modest. Look for regions where energy is high but repair return is weak, then prune or redesign interventions."
                 )
 
-    # Rolling window and simulation factor
+    # 5. Early warning on instability around thresholds
+    if p10 is not None and p90 is not None:
+        crosses_low = p10 < 0.3 < p90
+        crosses_high = p10 < 0.6 < p90
+        if language == "Español":
+            if crosses_low and not crosses_high:
+                lines.append(
+                    "La serie cruza la banda de RYE 0.3, lo que indica periodos donde la eficiencia cae por "
+                    "debajo de lo deseable. Es una señal temprana para reforzar los bucles de corrección."
+                )
+            elif crosses_high:
+                lines.append(
+                    "El RYE recorre tanto zonas débiles como zonas estables por encima de 0.6. Esto sugiere que "
+                    "hay condiciones bajo las cuales el sistema ya opera en modo de alta eficiencia; vale la pena "
+                    "identificarlas y expandirlas."
+                )
+        else:
+            if crosses_low and not crosses_high:
+                lines.append(
+                    "The series crosses the 0.3 RYE band, which means there are periods where efficiency falls "
+                    "below a healthy level. This is an early warning to strengthen correction loops."
+                )
+            elif crosses_high:
+                lines.append(
+                    "RYE visits both weak and stable zones above 0.6. This suggests that under some conditions the "
+                    "system already operates in a high efficiency mode; those conditions are worth identifying and scaling."
+                )
+
+    # 6. Optional nonzero and positive fraction hints
+    if nonzero_frac is not None:
+        try:
+            nz = float(nonzero_frac)
+        except Exception:
+            nz = None
+        if nz is not None:
+            if language == "Español":
+                if nz < 0.2:
+                    lines.append(
+                        "Solo una fracción pequeña de los ciclos muestra RYE distinto de cero, lo que indica que la "
+                        "mayoría de los pasos no cambian el estado de reparación de manera medible."
+                    )
+                elif nz < 0.6:
+                    lines.append(
+                        "Una parte moderada de los ciclos aporta reparación efectiva; hay margen para reducir ciclos "
+                        "innecesarios que consumen energía sin mejorar el sistema."
+                    )
+                else:
+                    lines.append(
+                        "La mayoría de los ciclos contribuyen con alguna reparación; la optimización puede enfocarse "
+                        "en elevar la eficiencia de los peores segmentos."
+                    )
+            else:
+                if nz < 0.2:
+                    lines.append(
+                        "Only a small fraction of cycles show nonzero RYE, which means most steps do not measurably "
+                        "change the repair state."
+                    )
+                elif nz < 0.6:
+                    lines.append(
+                        "A moderate share of cycles provide effective repair; there is room to reduce cycles that burn "
+                        "energy without improving the system."
+                    )
+                else:
+                    lines.append(
+                        "Most cycles contribute some repair; optimization can focus on lifting the worst performing segments."
+                    )
+
+    if positive_frac is not None:
+        try:
+            pf = float(positive_frac)
+        except Exception:
+            pf = None
+        if pf is not None:
+            if language == "Español":
+                if pf < 0.5:
+                    lines.append(
+                        "Menos de la mitad de los ciclos terminan con RYE positivo. El sistema pasa mucho tiempo "
+                        "corrigiendo fallos o revirtiendo ineficiencias."
+                    )
+                elif pf < 0.8:
+                    lines.append(
+                        "Una mayoría de los ciclos es positiva, pero los periodos negativos siguen siendo importantes. "
+                        "Es clave localizar esos tramos y rediseñar la estrategia de reparación."
+                    )
+                else:
+                    lines.append(
+                        "Casi todos los ciclos aportan reparación positiva. El reto principal es mejorar la eficiencia "
+                        "de los ciclos menos rentables, no eliminar ciclos fallidos."
+                    )
+            else:
+                if pf < 0.5:
+                    lines.append(
+                        "Fewer than half of the cycles end with positive RYE. The system spends a lot of time "
+                        "correcting failures or undoing inefficiencies."
+                    )
+                elif pf < 0.8:
+                    lines.append(
+                        "Most cycles are positive, but negative periods are still significant. It is crucial to "
+                        "locate those stretches and redesign the repair strategy."
+                    )
+                else:
+                    lines.append(
+                        "Almost all cycles deliver positive repair. The main challenge is to lift efficiency among "
+                        "the least productive cycles rather than eliminating failed ones."
+                    )
+
+    # 7. Rolling window and simulation factor
     if language == "Español":
         lines.append(f"La ventana móvil de {w} puntos ayuda a suavizar el ruido de corto plazo.")
         if sim_mult != 1.0:
             if sim_mult < 1.0:
                 lines.append(
-                    f"Se aplicó un factor de escala de energía de {sim_mult:.2f}. Si el resultado se mantiene, "
-                    "un menor gasto de energía debería elevar el RYE."
+                    f"Se aplicó un factor de escala de energía de {sim_mult:.2f}. Si los resultados se mantienen, "
+                    "un menor gasto de energía debería elevar el RYE observado."
                 )
             else:
                 lines.append(
-                    f"Se aplicó un factor de escala de energía de {sim_mult:.2f}. Si la reparación o el desempeño "
-                    "no mejoran al mismo ritmo, el RYE tenderá a disminuir."
+                    f"Se aplicó un factor de escala de energía de {sim_mult:.2f}. A menos que la reparación o el "
+                    "desempeño mejoren en la misma proporción, el RYE tenderá a disminuir."
                 )
     else:
         lines.append(f"A rolling window of {w} points smooths short term noise.")
         if sim_mult != 1.0:
             if sim_mult < 1.0:
                 lines.append(
-                    f"An energy scaling factor of {sim_mult:.2f} was applied. If outcomes stay constant, using "
-                    "less energy should increase RYE."
+                    f"An energy scaling factor of {sim_mult:.2f} was applied. If outcomes stay constant, "
+                    "using less energy should increase observed RYE."
                 )
             else:
                 lines.append(
                     f"An energy scaling factor of {sim_mult:.2f} was applied. Unless repair or performance improves "
-                    "accordingly, RYE will tend to fall."
+                    "at a similar rate, RYE will tend to fall."
                 )
 
-    # Next steps guidance
+    # 8. Next steps guidance
     if marketing_mode_local:
         if language == "Español":
             lines.append(
-                "Siguiente paso para equipos de marketing: relaciona picos y caídas de RYE con canales, "
-                "creativos y audiencias específicos, y utiliza esa señal para mover presupuesto y diseñar pruebas A/B."
+                "Siguiente paso para equipos de marketing: vincula picos y caídas de RYE con canales, creativos y "
+                "audiencias específicos, y utiliza esa señal para mover presupuesto, ajustar frecuencia y diseñar pruebas A/B."
             )
         else:
             lines.append(
                 "Next steps for marketing teams: map RYE spikes and dips to specific channels, creatives, and "
-                "audiences, and use that signal to guide budget shifts and A/B tests."
+                "audiences, and use that signal to guide budget shifts, frequency caps, and A/B tests."
             )
     else:
         if language == "Español":
             lines.append(
-                "Siguiente paso: relacionar picos y caídas de RYE con intervenciones concretas y repetir ciclos "
-                "TGRM (detectar, corregir con el mínimo cambio, verificar)."
+                "Siguiente paso: vincula los picos y caídas de RYE con intervenciones concretas y repite ciclos TGRM "
+                "(detectar, corregir con el mínimo cambio, verificar). Usa las zonas de alto RYE como huellas de "
+                "configuraciones sanas y las zonas de bajo RYE como candidatos para reparación cuantificada."
             )
         else:
             lines.append(
-                "Next: map spikes and dips to concrete interventions and iterate TGRM loops "
-                "(detect, minimal fix, verify)."
+                "Next: map spikes and dips in RYE to concrete interventions and iterate TGRM loops "
+                "(detect, minimal fix, verify). Treat high RYE zones as fingerprints of healthy configurations "
+                "and low RYE zones as candidates for quantified repair."
             )
 
     return " ".join(lines)
@@ -1164,7 +1323,7 @@ with tab3:
             # remember the effective domain col for use in reports (separate key, safe)
             st.session_state["effective_domain_col"] = effective_domain_col
 
-            b = compute_block(df1, "primary", sim_factor, auto_roll)
+            b = compute_block(df1, "primary", sim_mult, auto_roll)
             dfp = b["df"].copy()
             dfp["RYE"] = b["rye"]
 
@@ -1229,7 +1388,7 @@ with tab4:
                 if b.get(k) is not None:
                     metadata[k] = b[k]
 
-            interp = make_interpretation(summary, w, sim_factor, preset_name)
+            interp = make_interpretation(summary, w, sim_mult, preset_name)
 
             with st.expander(tr("PDF diagnostics", "Diagnóstico del PDF"), expanded=False):
                 if build_pdf is None:
