@@ -588,6 +588,12 @@ def _decompress_gzip_to_bytes_io(file, original_name: str) -> io.BytesIO:
 def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.BytesIO]:
     """
     Extract a useful inner file from a zip.
+
+    Updated for Darwin Core Archives:
+      - Works even when occurrence.txt / event.txt / emof.txt live in subfolders.
+      - Falls back to the first CSV/TSV/TXT (by basename) if those are missing.
+      - Then falls back to NetCDF / JSON.
+
     Priority:
       1) occurrence.txt (DwC-A)
       2) event.txt, emof.txt
@@ -598,30 +604,62 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
     try:
         with zipfile.ZipFile(file) as zf:
             names = zf.namelist()
+            if not names:
+                st.error(
+                    tr(
+                        "Zip archive is empty.",
+                        "El archivo zip está vacío.",
+                    )
+                )
+                return None
+
+            # Map full lower-case path to actual path
+            full_lower_map = {n.lower(): n for n in names}
+            # Map lower-case basename to first occurrence of that basename
+            base_lower_map: Dict[str, str] = {}
+            for n in names:
+                base = os.path.basename(n).lower()
+                if base and base not in base_lower_map:
+                    base_lower_map[base] = n
+
             target = None
 
-            preferred = [
+            # 1) Prefer DwC-A core tables by basename (handles folders like 'data/occurrence.txt')
+            preferred_basenames = [
                 "occurrence.txt",
                 "event.txt",
                 "emof.txt",
             ]
-            lower_map = {n.lower(): n for n in names}
-
-            for cand in preferred:
-                if cand in lower_map:
-                    target = lower_map[cand]
+            for cand in preferred_basenames:
+                # check by full path first
+                if cand in full_lower_map:
+                    target = full_lower_map[cand]
+                    break
+                # then by basename
+                if cand in base_lower_map and target is None:
+                    target = base_lower_map[cand]
                     break
 
+            # 2) Otherwise pick any CSV/TSV/TXT by basename
             if target is None:
                 for ext in (".csv", ".tsv", ".txt"):
-                    matches = [n for n in names if n.lower().endswith(ext)]
+                    matches = [
+                        n
+                        for n in names
+                        if os.path.basename(n).lower().endswith(ext)
+                    ]
                     if matches:
                         target = matches[0]
                         break
 
+            # 3) Otherwise pick NetCDF/JSON
             if target is None:
                 for ext in (".nc", ".netcdf", ".json"):
-                    matches = [n for n in names if n.lower().endswith(ext)]
+                    matches = [
+                        n
+                        for n in names
+                        if os.path.basename(n).lower().endswith(ext)
+                    ]
                     if matches:
                         target = matches[0]
                         break
@@ -629,8 +667,8 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
             if target is None:
                 st.error(
                     tr(
-                        "Zip archive found but no tabular or NetCDF file could be identified.",
-                        "Se encontró un archivo zip pero no se identificó ningún archivo tabular o NetCDF.",
+                        "Zip archive found but no tabular or NetCDF/JSON file could be identified.",
+                        "Se encontró un archivo zip pero no se identificó ningún archivo tabular o NetCDF/JSON.",
                     )
                 )
                 return None
@@ -639,7 +677,7 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
                 data = inner_file.read()
 
         inner = io.BytesIO(data)
-        inner.name = target  # type: ignore[attr-defined]
+        inner.name = os.path.basename(target) or target  # type: ignore[attr-defined]
         inner.seek(0)
         return inner
     except Exception as e:
@@ -658,7 +696,8 @@ def load_any(file) -> Optional[pd.DataFrame]:
     Safe loader for user files:
     - Handles Excel, CSV, TSV, TXT
     - Handles gzip compressed files (.gz) by decompressing then delegating
-    - Handles zip archives (.zip), with DwC-A or a single CSV/TSV/TXT/NetCDF inside
+    - Handles Darwin Core archives and general zip archives (.zip), with DwC-A
+      tables (occurrence.txt / event.txt / emof.txt) or a single CSV/TSV/TXT/NetCDF inside
     - Attempts XML to table when possible
     - Delegates complex or remaining formats to core.load_table
     - Rejects very large uploads (> 200 MB) to avoid exhausting memory
@@ -692,7 +731,7 @@ def load_any(file) -> Optional[pd.DataFrame]:
         except Exception:
             return None
 
-    # Handle zip archives by extracting a useful inner file then recursing
+    # Handle zip archives (including Darwin Core Archives)
     if name_lower.endswith(".zip"):
         inner = _extract_from_zip_to_bytes_io(file, filename)
         if inner is None:
@@ -719,7 +758,10 @@ def load_any(file) -> Optional[pd.DataFrame]:
             try:
                 df = pd.read_csv(file, sep=None, engine="python")
             except Exception:
-                file.seek(0)
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
                 df = pd.read_csv(file, sep="\t")
 
         # XML: try pandas read_xml which works for many simple structures
