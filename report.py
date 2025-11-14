@@ -283,25 +283,43 @@ def _headline_from_summary(summary: Dict[str, Any], metadata: Dict[str, Any]) ->
     if preset_name == "marketing":
         base = f"Campaign RYE shows {eff_label} with {stab_label}."
         if low_band_cross:
-            tail = "There are clear periods where efficiency falls into a weak band; those segments are prime targets for budget repair."
+            tail = (
+                "There are clear periods where efficiency falls into a weak band; those segments "
+                "are prime targets for budget repair."
+            )
         else:
-            tail = "Most cycles cluster in a consistent efficiency band; use high RYE segments as a guide for scaling spend."
+            tail = (
+                "Most cycles cluster in a consistent efficiency band; use high RYE segments as a "
+                "guide for scaling spend."
+            )
         return f"{base} {tail}"
 
     if preset_name == "marine biology":
         base = f"Marine RYE shows {eff_label} with {stab_label} across the observed seasons."
         if low_band_cross:
-            tail = "Cycles dip through the low efficiency band, hinting at stress periods where gross primary production gains are weak for the respiratory cost."
+            tail = (
+                "Cycles dip through the low efficiency band, hinting at stress periods where gross "
+                "primary production gains are weak for the respiratory cost."
+            )
         else:
-            tail = "Efficiency stays in a relatively stable band, suggesting a repeatable coupling between production and respiration."
+            tail = (
+                "Efficiency stays in a relatively stable band, suggesting a repeatable coupling "
+                "between production and respiration."
+            )
         return f"{base} {tail}"
 
     # Generic headline
     base = f"RYE shows {eff_label} with {stab_label} across the dataset."
     if low_band_cross:
-        tail = "The series crosses the low efficiency band around 0.3, which acts as an early warning for unstable repair."
+        tail = (
+            "The series crosses the low efficiency band around 0.3, which acts as an early "
+            "warning for unstable repair."
+        )
     else:
-        tail = "Most cycles stay within a narrow efficiency band, pointing to a characteristic operating regime."
+        tail = (
+            "Most cycles stay within a narrow efficiency band, pointing to a characteristic "
+            "operating regime."
+        )
     return f"{base} {tail}"
 
 
@@ -344,12 +362,20 @@ def build_pdf(
 
     _med_gap(pdf)
 
-    # Quick summary headline (2 line style, preset aware)
+    # Quick summary headline (preset aware)
     headline = _headline_from_summary(summary, metadata)
     if headline:
         _section_title(pdf, "Quick summary", W)
         pdf.set_font("Helvetica", "", 11)
         _wrap(pdf, headline, W)
+
+        # If the app supplied a separate quick_summary string in metadata, show it just under the headline.
+        meta_qs = str(metadata.get("quick_summary", "") or "").strip()
+        if meta_qs:
+            _small_gap(pdf)
+            pdf.set_font("Helvetica", "I", 10)
+            _wrap(pdf, meta_qs, W)
+
         _med_gap(pdf)
 
     # Summary stats (grid-like listing) use 2 columns for more room
