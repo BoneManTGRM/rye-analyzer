@@ -767,7 +767,10 @@ def load_any(file) -> Optional[pd.DataFrame]:
         st.error(tr(f"Could not read file. {e}", f"No se pudo leer el archivo. {e}"))
         st.code(traceback.format_exc(), language="text")
         return None
-        def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
+          return None
+
+# ← IMPORTANT: def must start at the LEFT MARGIN (no indentation)
+def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
     """
     Ensure the requested repair/energy columns exist.
 
