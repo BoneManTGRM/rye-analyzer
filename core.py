@@ -596,8 +596,18 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
     "domain": [
         "domain",
         "group",
+        "group_id",
         "condition",
+        "condition_id",
         "treatment_group",
+        "scenario",
+        "scenario_id",
+        "scenario_stress",
+        "trial",
+        "replicate",
+        "rep",
+        "block",
+        "cluster",
         "species",
         "site",
         "site_id",
@@ -610,6 +620,7 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
         "run_id",
         "run",
         "experiment",
+        "experiment_id",
         "plate",
         "sample_id",
         "subject_id",
@@ -644,7 +655,6 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
         "pack_id",
         "well_id",
         "plant",
-        "experiment_id",
     ],
 }
 
@@ -998,6 +1008,8 @@ def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[s
       1) The active preset keyword lists
       2) Generic COLUMN_ALIASES fallbacks
       3) Simple numeric fallbacks
+      4) As a last resort for domain: pick the best categorical column
+         (low cardinality, not time-like) so multi-domain still works.
     """
     cols = list(df.columns)
     preset = PRESETS.get(preset_name) if preset_name and preset_name in PRESETS else None
@@ -1050,12 +1062,64 @@ def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[s
         if t_like:
             guesses["time"] = t_like[0]
 
+    # Extra alias sweep for domain
     if guesses.get("domain") is None:
         for cand in COLUMN_ALIASES.get("domain", []):
             m = _best_match(cols, [cand])
             if m:
                 guesses["domain"] = m
                 break
+
+    # Smart categorical fallback for domain:
+    # if no alias matched, pick the most reasonable categorical column
+    if guesses.get("domain") is None and len(df) > 0:
+        n_rows = len(df)
+        cat_candidates: List[tuple] = []
+
+        for c in cols:
+            # Avoid reusing the time column as domain
+            if c == guesses.get("time"):
+                continue
+
+            cl = c.lower()
+            # Skip obvious time-like columns
+            if any(
+                key in cl
+                for key in ("time", "date", "epoch", "step", "iteration", "year", "season")
+            ):
+                continue
+
+            s = df[c]
+            try:
+                nunique = int(s.nunique(dropna=True))
+            except Exception:
+                continue
+
+            # Need at least 2 levels
+            if nunique < 2:
+                continue
+
+            frac = float(nunique) / float(max(1, n_rows))
+
+            # Skip near-unique IDs (almost one value per row)
+            if frac > 0.9:
+                continue
+
+            is_catlike = (
+                s.dtype == "object"
+                or pd.api.types.is_categorical_dtype(s)
+                or nunique <= 50
+            )
+            if not is_catlike:
+                continue
+
+            # Lower frac = fewer groups relative to rows (more domain-like)
+            cat_candidates.append((frac, nunique, c))
+
+        if cat_candidates:
+            # Sort by fraction of unique values, then by absolute cardinality
+            cat_candidates.sort(key=lambda x: (x[0], x[1]))
+            guesses["domain"] = cat_candidates[0][2]
 
     return guesses
 
