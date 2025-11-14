@@ -8,6 +8,7 @@
 # summaries with resilience and quantiles
 # optional analytics: regimes, correlations, noise floor, bootstrap bands
 # extras: cumulative RYE, per domain RYE, outlier flags, simple unit scaling
+# reparodynamics helpers: TGRM trace and high level reparodynamics summary
 
 from __future__ import annotations
 import io
@@ -162,7 +163,7 @@ except Exception:
                 "pco2",
                 "salinity",
                 "stress",
-                # synthetic marine-energy proxies
+                # synthetic marine energy proxies
                 "survey_effort_hours",
                 "chlorophyll_mg_m3",
                 "survey_minutes",
@@ -281,7 +282,7 @@ except Exception:
             default_rolling=10,
             tooltips={"feed_conversion_inv": "Inverse FCR, higher is better"},
         ),
-        # Omics-friendly fallback preset (e.g., DESeq2-style tables)
+        # Omics friendly fallback preset (e.g., DESeq2 style tables)
         "Omics/DESeq2": Preset(
             "Omics/DESeq2",
             time=_kw(
@@ -313,7 +314,7 @@ except Exception:
                 "Time": "Use time or sample_index if available; if not, the row index can be treated as a run index.",
                 "Performance": "Use log2 fold change or effect_size as your signal of change.",
                 "Energy": "Use dose, concentration, or padj as a proxy cost or stress level.",
-                "Domain": "Group by symbol or gene_id to see per-gene repair patterns.",
+                "Domain": "Group by symbol or gene_id to see per gene repair patterns.",
             },
         ),
         # Fallback Marketing preset (in case presets.py is not present)
@@ -358,12 +359,20 @@ except Exception:
             domain="domain",
             default_rolling=14,
             tooltips={
-                "ctr": "Click-through rate; clicks / impressions.",
+                "ctr": "Click through rate; clicks / impressions.",
                 "roas": "Return on ad spend; revenue / ad_spend.",
                 "retention": "Share of users who stay active over time.",
             },
         ),
     }
+
+# If presets.py defines large generic lists, reuse them.
+try:
+    from presets import GENERIC_TIME, GENERIC_PERF, GENERIC_ENERGY  # type: ignore
+except Exception:
+    GENERIC_TIME: List[str] = []
+    GENERIC_PERF: List[str] = []
+    GENERIC_ENERGY: List[str] = []
 
 # ------------------------------
 # Column aliases for inference
@@ -384,7 +393,7 @@ def _dedupe_str(seq: Sequence[str]) -> List[str]:
         out.append(s_lower)
     return out
 
-# Base seeds that already work well with existing datasets
+# Base seeds that already work well with existing datasets plus any GENERIC_* from presets
 _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
     "time": [
         "time",
@@ -417,7 +426,7 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
         "mission_time",
         "cycle",
         "visit",
-    ],
+    ] + list(GENERIC_TIME),
     "performance": [
         "performance",
         "repair",
@@ -519,7 +528,7 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
         "collision_rate_inv",
         "fall_rate_inv",
         "path_accuracy",
-    ],
+    ] + list(GENERIC_PERF),
     "energy": [
         "energy",
         "effort",
@@ -592,12 +601,22 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
         "motor_current",
         "joint_torque",
         "control_effort",
-    ],
+    ] + list(GENERIC_ENERGY),
     "domain": [
         "domain",
         "group",
+        "group_id",
         "condition",
+        "condition_id",
         "treatment_group",
+        "scenario",
+        "scenario_id",
+        "scenario_stress",
+        "trial",
+        "replicate",
+        "rep",
+        "block",
+        "cluster",
         "species",
         "site",
         "site_id",
@@ -610,6 +629,7 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
         "run_id",
         "run",
         "experiment",
+        "experiment_id",
         "plate",
         "sample_id",
         "subject_id",
@@ -644,7 +664,6 @@ _BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
         "pack_id",
         "well_id",
         "plant",
-        "experiment_id",
     ],
 }
 
@@ -656,7 +675,7 @@ _COLUMN_ALIASES_WORK: Dict[str, List[str]] = {
     "domain": list(_BASE_COLUMN_ALIASES["domain"]),
 }
 
-# Enrich aliases with everything defined in PRESETS (including large 100 column lists)
+# Enrich aliases with everything defined in PRESETS (including large lists)
 for _preset in PRESETS.values():
     try:
         _COLUMN_ALIASES_WORK["time"].extend(getattr(_preset, "time", []) or [])
@@ -696,9 +715,9 @@ def _read_text_table(text: str) -> pd.DataFrame:
 
 def _load_dwc_archive_from_filelike(file_like) -> pd.DataFrame:
     """
-    Best-effort Darwin Core Archive (DwC-A) loader.
+    Best effort Darwin Core Archive (DwC A) loader.
 
-    Expects a zip-like object. If a meta.xml file is present, use it to locate
+    Expects a zip like object. If a meta.xml file is present, use it to locate
     the core table. Otherwise, fall back to the first .txt file in the archive.
     """
     file_like.seek(0)
@@ -745,7 +764,7 @@ def _load_eml_from_bytes(data: bytes) -> pd.DataFrame:
 
     Many .eml files in ecology are metadata only. Here we try to interpret the
     file as a delimited text table; if that fails, raise a clear message so the
-    user knows they should export a CSV or DwC-A instead.
+    user knows they should export a CSV or DwC A instead.
     """
     text = data.decode("utf-8", errors="replace")
     try:
@@ -753,13 +772,13 @@ def _load_eml_from_bytes(data: bytes) -> pd.DataFrame:
     except Exception as e:
         raise ValueError(
             "This EML file appears to be metadata, not a tabular dataset. "
-            "Please export the underlying data table as CSV or DwC-A."
+            "Please export the underlying data table as CSV or DwC A."
         ) from e
 
 
 def _load_rtf_from_bytes(data: bytes) -> pd.DataFrame:
     """
-    Best-effort RTF loader.
+    Best effort RTF loader.
 
     Strip common RTF control sequences in a naive way and then attempt to parse
     as a delimited text table. This will only work if the RTF actually contains
@@ -789,13 +808,13 @@ def _load_special_from_bytes(data: bytes, name: str) -> Optional[pd.DataFrame]:
     """
     lower = name.lower()
 
-    # DwC-A (zip-based Darwin Core Archive)
+    # DwC A (zip based Darwin Core Archive)
     if lower.endswith((".zip", ".dwc", ".dwca", ".dwc-a")):
         buf = io.BytesIO(data)
         try:
             return _load_dwc_archive_from_filelike(buf)
         except Exception:
-            # If it's just a generic zip or an unexpected layout,
+            # If it is just a generic zip or an unexpected layout,
             # fall through to normal handling.
             return None
 
@@ -823,8 +842,8 @@ def load_table(src) -> pd.DataFrame:
     New behavior:
       - If the upload looks like a Darwin Core Archive (.zip/.dwc/.dwca/.dwc-a),
         try to parse it via meta.xml or the first .txt file.
-      - If the upload is .eml or .rtf, attempt a best-effort text-table parse
-        and raise a clear error if it's metadata-only.
+      - If the upload is .eml or .rtf, attempt a best effort text-table parse
+        and raise a clear error if it is metadata only.
     """
     # Uploaded file like Streamlit's UploadedFile
     if hasattr(src, "read") and not isinstance(src, (str, bytes)):
@@ -832,7 +851,7 @@ def load_table(src) -> pd.DataFrame:
         name = getattr(src, "name", "upload")
         lower = name.lower()
 
-        # Special formats first (DwC-A zip, EML, RTF)
+        # Special formats first (DwC A zip, EML, RTF)
         special_df = _load_special_from_bytes(data, name)
         if special_df is not None:
             return special_df
@@ -869,7 +888,7 @@ def load_table(src) -> pd.DataFrame:
         except Exception:
             pass
 
-        # Generic text fall-back (CSV or TSV)
+        # Generic text fall back (CSV or TSV)
         text = data.decode("utf-8", errors="replace")
         return _read_text_table(text)
 
@@ -936,10 +955,15 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         create an "accuracy" column equal to "performance".
       - If a dataframe has "energy" but not "tokens",
         create a "tokens" column equal to "energy".
+      - If a dataframe has "accuracy" but not "performance",
+        create "performance" equal to "accuracy".
+      - If a dataframe has "tokens" but not "energy",
+        create "energy" equal to "tokens".
 
     This lets older code or saved session_state that still refers
     to accuracy/tokens work even when the actual CSV uses
-    performance/energy.
+    performance/energy, and also lets newer code use performance/energy
+    when only accuracy/tokens exist.
     """
     def norm(c: str) -> str:
         s = str(c).strip().lower()
@@ -952,13 +976,19 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     cols = list(out.columns)
 
-    # Add compatibility aliases
+    # Two way compatibility aliases
     if "performance" in cols and "accuracy" not in cols:
         out["accuracy"] = out["performance"]
         cols.append("accuracy")
     if "energy" in cols and "tokens" not in cols:
         out["tokens"] = out["energy"]
         cols.append("tokens")
+    if "accuracy" in cols and "performance" not in cols:
+        out["performance"] = out["accuracy"]
+        cols.append("performance")
+    if "tokens" in cols and "energy" not in cols:
+        out["energy"] = out["tokens"]
+        cols.append("energy")
 
     return out
 
@@ -998,6 +1028,8 @@ def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[s
       1) The active preset keyword lists
       2) Generic COLUMN_ALIASES fallbacks
       3) Simple numeric fallbacks
+      4) As a last resort for domain: pick the best categorical column
+         (low cardinality, not time-like) so multi domain still works.
     """
     cols = list(df.columns)
     preset = PRESETS.get(preset_name) if preset_name and preset_name in PRESETS else None
@@ -1050,12 +1082,64 @@ def infer_columns(df: pd.DataFrame, preset_name: Optional[str] = None) -> Dict[s
         if t_like:
             guesses["time"] = t_like[0]
 
+    # Extra alias sweep for domain
     if guesses.get("domain") is None:
         for cand in COLUMN_ALIASES.get("domain", []):
             m = _best_match(cols, [cand])
             if m:
                 guesses["domain"] = m
                 break
+
+    # Smart categorical fallback for domain:
+    # if no alias matched, pick the most reasonable categorical column
+    if guesses.get("domain") is None and len(df) > 0:
+        n_rows = len(df)
+        cat_candidates: List[tuple] = []
+
+        for c in cols:
+            # Avoid reusing the time column as domain
+            if c == guesses.get("time"):
+                continue
+
+            cl = c.lower()
+            # Skip obvious time-like columns
+            if any(
+                key in cl
+                for key in ("time", "date", "epoch", "step", "iteration", "year", "season")
+            ):
+                continue
+
+            s = df[c]
+            try:
+                nunique = int(s.nunique(dropna=True))
+            except Exception:
+                continue
+
+            # Need at least 2 levels
+            if nunique < 2:
+                continue
+
+            frac = float(nunique) / float(max(1, n_rows))
+
+            # Skip near-unique IDs (almost one value per row)
+            if frac > 0.9:
+                continue
+
+            is_catlike = (
+                s.dtype == "object"
+                or pd.api.types.is_categorical_dtype(s)
+                or nunique <= 50
+            )
+            if not is_catlike:
+                continue
+
+            # Lower frac = fewer groups relative to rows (more domain-like)
+            cat_candidates.append((frac, nunique, c))
+
+        if cat_candidates:
+            # Sort by fraction of unique values, then by absolute cardinality
+            cat_candidates.sort(key=lambda x: (x[0], x[1]))
+            guesses["domain"] = cat_candidates[0][2]
 
     return guesses
 
@@ -1156,6 +1240,191 @@ def compute_rye_cumulative(rye_series: Sequence[float]) -> np.ndarray:
     a = np.asarray(rye_series, dtype=float)
     a[~np.isfinite(a)] = 0.0
     return np.cumsum(a)
+
+# ------------------------------
+# Reparodynamics and TGRM helpers
+# ------------------------------
+def compute_tgrm_trace(
+    df: pd.DataFrame,
+    repair_col: str = "performance",
+    energy_col: str = "energy",
+    clamp_negative_delta: bool = False,
+    energy_floor: float = 1e-9,
+    repair_threshold: float = 0.0,
+) -> Dict[str, np.ndarray]:
+    """
+    Compute a basic TGRM style trace.
+
+    Returns a dict with:
+      - performance: numeric performance series
+      - energy: numeric energy series
+      - delta_performance: stepwise change in performance
+      - rye: RYE per step (respecting clamp_negative_delta)
+      - repair_step: binary mask where delta_performance > repair_threshold
+                     and energy is above energy_floor
+    """
+    # Same alias behavior as compute_rye_from_df
+    if repair_col not in df.columns and "performance" in df.columns:
+        repair_col = "performance"
+    if energy_col not in df.columns and "energy" in df.columns:
+        energy_col = "energy"
+
+    missing = [c for c in (repair_col, energy_col) if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {', '.join(missing)}")
+
+    perf = _coerce_numeric(df[repair_col])
+    energy = _coerce_numeric(df[energy_col])
+
+    dperf = np.diff(perf, prepend=perf[:1])
+    dperf = np.where(np.isfinite(dperf), dperf, 0.0)
+    if not clamp_negative_delta:
+        # keep negatives as is
+        pass
+    else:
+        dperf = np.maximum(dperf, 0.0)
+
+    denom = np.where(np.isfinite(energy) & (energy > 0.0), energy, energy_floor)
+    rye = dperf / denom
+    rye = np.where(np.isfinite(rye), rye, 0.0)
+
+    repair_mask = (dperf > repair_threshold) & (energy >= energy_floor)
+
+    return {
+        "performance": perf,
+        "energy": energy,
+        "delta_performance": dperf,
+        "rye": rye,
+        "repair_step": repair_mask.astype(int),
+    }
+
+def summarize_tgrm(
+    df: pd.DataFrame,
+    repair_col: str = "performance",
+    energy_col: str = "energy",
+    clamp_negative_delta: bool = False,
+    energy_floor: float = 1e-9,
+    repair_threshold: float = 0.0,
+    high_quality_rye: float = 1.0,
+) -> Dict[str, float]:
+    """
+    Compact TGRM summary.
+
+    Metrics:
+      - steps: total number of steps
+      - repair_steps: count where delta_performance > repair_threshold
+      - repair_fraction: repair_steps / steps
+      - mean_delta_on_repairs
+      - mean_rye_on_repairs
+      - high_quality_repairs: repair steps with rye >= high_quality_rye
+      - high_quality_fraction: high_quality_repairs / max(1, repair_steps)
+      - cumulative_rye: sum of rye over all steps
+    """
+    trace = compute_tgrm_trace(
+        df,
+        repair_col=repair_col,
+        energy_col=energy_col,
+        clamp_negative_delta=clamp_negative_delta,
+        energy_floor=energy_floor,
+        repair_threshold=repair_threshold,
+    )
+
+    perf = trace["performance"]
+    dperf = trace["delta_performance"]
+    rye = trace["rye"]
+    repair_step = trace["repair_step"].astype(bool)
+
+    n_steps = int(len(perf))
+    n_repairs = int(repair_step.sum())
+
+    if n_repairs > 0:
+        d_on_rep = dperf[repair_step]
+        rye_on_rep = rye[repair_step]
+        mean_delta = float(np.nanmean(d_on_rep))
+        mean_rye = float(np.nanmean(rye_on_rep))
+        high_mask = rye_on_rep >= high_quality_rye
+        n_high = int(high_mask.sum())
+        high_frac = float(n_high) / float(max(1, n_repairs))
+    else:
+        mean_delta = 0.0
+        mean_rye = 0.0
+        n_high = 0
+        high_frac = 0.0
+
+    cumulative_rye = float(np.nansum(rye))
+
+    return {
+        "steps": float(n_steps),
+        "repair_steps": float(n_repairs),
+        "repair_fraction": float(n_repairs) / float(max(1, n_steps)),
+        "mean_delta_on_repairs": mean_delta,
+        "mean_rye_on_repairs": mean_rye,
+        "high_quality_repairs": float(n_high),
+        "high_quality_fraction": high_frac,
+        "cumulative_rye": cumulative_rye,
+    }
+
+def reparodynamics_summary(
+    df: pd.DataFrame,
+    repair_col: str = "performance",
+    energy_col: str = "energy",
+    clamp_negative_delta: bool = True,
+    energy_floor: float = 1e-9,
+    repair_threshold: float = 0.0,
+    high_quality_rye: float = 1.0,
+) -> Dict[str, Any]:
+    """
+    High level Reparodynamics summary.
+
+    Wraps:
+      - RYE distribution stats
+      - noise floor estimate
+      - energy vs delta performance correlation
+      - TGRM style repair summary
+    """
+    # Compute main RYE with requested clamp behavior
+    rye = compute_rye_from_df(
+        df,
+        repair_col=repair_col,
+        energy_col=energy_col,
+        clamp_negative_delta=clamp_negative_delta,
+        energy_floor=energy_floor,
+    )
+
+    rye_stats = summarize_series(rye, with_shape=True)
+    noise = estimate_noise_floor(rye)
+
+    corr = {"pearson": float("nan"), "spearman": float("nan")}
+    try:
+        corr = energy_delta_performance_correlation(df, perf_col=repair_col, energy_col=energy_col)
+    except Exception:
+        pass
+
+    try:
+        tgrm = summarize_tgrm(
+            df,
+            repair_col=repair_col,
+            energy_col=energy_col,
+            clamp_negative_delta=clamp_negative_delta,
+            energy_floor=energy_floor,
+            repair_threshold=repair_threshold,
+            high_quality_rye=high_quality_rye,
+        )
+    except Exception:
+        tgrm = {}
+
+    cumulative_rye = compute_rye_cumulative(rye)
+    total_cumulative_rye = float(cumulative_rye[-1]) if cumulative_rye.size > 0 else 0.0
+
+    return {
+        "repair_col": repair_col,
+        "energy_col": energy_col,
+        "rye_stats": rye_stats,
+        "noise_floor": noise,
+        "energy_delta_performance_correlation": corr,
+        "tgrm": tgrm,
+        "total_cumulative_rye": total_cumulative_rye,
+    }
 
 # ------------------------------
 # Rolling helpers
@@ -1403,6 +1672,9 @@ __all__ = [
     "compute_rye_from_df",
     "compute_rye",
     "compute_rye_cumulative",
+    "compute_tgrm_trace",
+    "summarize_tgrm",
+    "reparodynamics_summary",
     "rolling_series",
     "ema_series",
     "recommend_window",
