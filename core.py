@@ -891,7 +891,7 @@ def load_table(src) -> pd.DataFrame:
 
     New behavior:
       - If the upload looks like a Darwin Core Archive (.zip/.dwc/.dwca/.dwc-a),
-        try to parse it via meta.xml or the first .txt file.
+        try to parse it via meta.xml or Darwin-style tables.
       - If the upload is .eml or .rtf, attempt a best effort text-table parse
         and raise a clear error if it is metadata only.
     """
