@@ -713,12 +713,61 @@ def _read_text_table(text: str) -> pd.DataFrame:
     return pd.read_csv(io.StringIO(text), sep=sep)
 
 
+def _load_darwin_zip_simple_from_filelike(file_like) -> pd.DataFrame:
+    """
+    Simple Darwin-style zip loader.
+
+    Looks for common Darwin Core tables (occurrence.txt, event.txt, etc) in any
+    subfolder. If none are found, falls back to the first .txt or .csv file.
+    """
+    file_like.seek(0)
+    with zipfile.ZipFile(file_like) as z:
+        names = z.namelist()
+        core_name: Optional[str] = None
+
+        # Prefer canonical Darwin Core core tables
+        candidates = [
+            "occurrence.txt",
+            "event.txt",
+            "measurementorfact.txt",
+            "extendedmeasurementorfact.txt",
+        ]
+
+        for cand in candidates:
+            for n in names:
+                if n.lower().endswith(cand):
+                    core_name = n
+                    break
+            if core_name:
+                break
+
+        # Fallback: any .txt or .csv
+        if core_name is None:
+            txt_names = [
+                n for n in names
+                if n.lower().endswith(".txt") or n.lower().endswith(".csv")
+            ]
+            if txt_names:
+                core_name = txt_names[0]
+
+        if core_name is None:
+            raise ValueError(
+                f"Zip archive does not contain a recognizable Darwin Core or "
+                f"tabular file. Files: {names}"
+            )
+
+        with z.open(core_name) as f:
+            text = f.read().decode("utf-8", errors="replace")
+            return _read_text_table(text)
+
+
 def _load_dwc_archive_from_filelike(file_like) -> pd.DataFrame:
     """
     Best effort Darwin Core Archive (DwC A) loader.
 
     Expects a zip like object. If a meta.xml file is present, use it to locate
-    the core table. Otherwise, fall back to the first .txt file in the archive.
+    the core table. Otherwise, fall back to a simple Darwin-style reader that
+    prefers occurrence.txt / event.txt and then any .txt/.csv.
     """
     file_like.seek(0)
     with zipfile.ZipFile(file_like) as z:
@@ -741,16 +790,15 @@ def _load_dwc_archive_from_filelike(file_like) -> pd.DataFrame:
             except Exception:
                 core_name = None
 
-        # Fallback: first .txt file
+        # If meta.xml did not resolve a core, use the simple Darwin zip logic
         if core_name is None:
-            txt_names = [n for n in names if n.lower().endswith(".txt")]
-            if txt_names:
-                core_name = txt_names[0]
+            # Reuse the simple helper by delegating
+            return _load_darwin_zip_simple_from_filelike(file_like)
 
-        if core_name is None:
+        # meta.xml gave us a core_name
+        if core_name not in names:
             raise ValueError(
-                "Zip archive does not look like a Darwin Core Archive "
-                "(no meta.xml or .txt table found)."
+                f"Core table '{core_name}' referenced in meta.xml not found in archive."
             )
 
         with z.open(core_name) as f:
@@ -811,12 +859,14 @@ def _load_special_from_bytes(data: bytes, name: str) -> Optional[pd.DataFrame]:
     # DwC A (zip based Darwin Core Archive)
     if lower.endswith((".zip", ".dwc", ".dwca", ".dwc-a")):
         buf = io.BytesIO(data)
+        # Try full Darwin Core handler first, then the simple zip fallback
         try:
             return _load_dwc_archive_from_filelike(buf)
         except Exception:
-            # If it is just a generic zip or an unexpected layout,
-            # fall through to normal handling.
-            return None
+            try:
+                return _load_darwin_zip_simple_from_filelike(io.BytesIO(data))
+            except Exception:
+                return None
 
     # EML metadata / text
     if lower.endswith(".eml"):
@@ -898,8 +948,15 @@ def load_table(src) -> pd.DataFrame:
 
     # Special formats from disk
     if lower.endswith((".zip", ".dwc", ".dwca", ".dwc-a")):
+        # Try full Darwin Core handler, then simple Darwin-style zip
         with open(path, "rb") as f:
-            return _load_dwc_archive_from_filelike(f)
+            try:
+                return _load_dwc_archive_from_filelike(f)
+            except Exception:
+                pass
+        with open(path, "rb") as f:
+            return _load_darwin_zip_simple_from_filelike(f)
+
     if lower.endswith(".eml"):
         with open(path, "rb") as f:
             return _load_eml_from_bytes(f.read())
