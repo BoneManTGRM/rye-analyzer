@@ -100,6 +100,7 @@ except Exception as e1:
 
 # Column alias map (if available) so we can be smart about domain fallbacks
 COLUMN_ALIASES = getattr(_core_mod, "COLUMN_ALIASES", {})
+DOMAIN_ALIASES = getattr(_core_mod, "DOMAIN_ALIASES", [])
 
 # ---------------- Import core helpers (with graceful fallbacks) ----------------
 load_table = _core_mod.load_table
@@ -1486,7 +1487,6 @@ with tab2:
                 file_name="rye_combined.csv",
                 mime="text/csv",
             )
-
 # ---------- Tab 3 ----------
 with tab3:
     if df1 is None:
@@ -1504,9 +1504,12 @@ with tab3:
         if effective_domain_col is None and "domain" in df1.columns:
             effective_domain_col = "domain"
 
-        # 3) aliases from COLUMN_ALIASES["domain"], if provided
+        # 3) aliases from DOMAIN_ALIASES then COLUMN_ALIASES["domain"], if provided
         if effective_domain_col is None:
-            alias_list = COLUMN_ALIASES.get("domain", [])
+            alias_list: list[str] = []
+            if isinstance(DOMAIN_ALIASES, (list, tuple)):
+                alias_list.extend([str(a) for a in DOMAIN_ALIASES])
+            alias_list.extend(COLUMN_ALIASES.get("domain", []))
             for cand in alias_list:
                 cand_actual = lower_to_actual.get(str(cand).lower())
                 if cand_actual is not None:
