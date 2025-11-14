@@ -767,9 +767,7 @@ def load_any(file) -> Optional[pd.DataFrame]:
         st.error(tr(f"Could not read file. {e}", f"No se pudo leer el archivo. {e}"))
         st.code(traceback.format_exc(), language="text")
         return None
-
-
-def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
+        def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
     """
     Ensure the requested repair/energy columns exist.
 
@@ -1240,9 +1238,7 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
             )
 
     return " ".join(lines)
-
-
-def make_quick_summary(summary: dict, w: int, preset_name: str) -> str:
+    def make_quick_summary(summary: dict, w: int, preset_name: str) -> str:
     """
     Short 1 to 2 sentence summary for the top of the report.
     This is what Erika or any scientist can read in 3 seconds.
@@ -1541,8 +1537,7 @@ with tab1:
                 file_name="summary.json",
                 mime="application/json",
             )
-
-# ---------- Tab 2 ----------
+            # ---------- Tab 2 ----------
 with tab2:
     if df1 is None or df2 is None:
         st.info(tr("Upload two files to compare.", "Sube dos archivos para comparar."))
@@ -1647,6 +1642,7 @@ with tab2:
                 file_name="rye_combined.csv",
                 mime="text/csv",
             )
+
 # ---------- Tab 3 ----------
 with tab3:
     if df1 is None:
