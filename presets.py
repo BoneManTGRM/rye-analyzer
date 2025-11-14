@@ -20,7 +20,7 @@ def _kw(*items):
 
 
 PRESETS: Dict[str, Preset] = {
-    # --- Core AI and Biology ---
+    # Core AI and Biology
     "AI": Preset(
         name="AI",
         time=_kw(
@@ -136,7 +136,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # --- Marine specific biology presets ---
+    # Marine specific biology presets
     "Marine Biology": Preset(
         name="Marine Biology",
         time=_kw(
@@ -283,7 +283,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # --- Engineering / Ops ---
+    # Engineering and Ops
     "Manufacturing": Preset(
         name="Manufacturing",
         time=_kw("time", "shift", "batch", "lot", "t", "day"),
@@ -432,7 +432,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # --- Science / Lab ---
+    # Science and Lab
     "Chemistry": Preset(
         name="Chemistry",
         time=_kw(
@@ -501,6 +501,56 @@ PRESETS: Dict[str, Preset] = {
             "Domain": "Group by reaction_id, catalyst, solvent, or batch.",
         },
     ),
+
+    # Omics preset with 30 possible column names across time, performance, energy
+    "Omics/Gene Expression Ultra": Preset(
+        name="Omics/Gene Expression Ultra",
+        time=_kw(
+            "time",
+            "t",
+            "index",
+            "row",
+            "rank",
+            "gene_index",
+        ),
+        performance=_kw(
+            "log2fc",
+            "logFC",
+            "log2_fold_change",
+            "c19_c_log2fc",
+            "c19_p_log2fc",
+            "effect_size",
+            "stat",
+            "t_stat",
+            "z_score",
+            "signal",
+            "score",
+            "fold_change",
+        ),
+        energy=_kw(
+            "padj",
+            "p_adj",
+            "pvalue",
+            "p_value",
+            "FDR",
+            "fdr",
+            "baseMean",
+            "lfcSE",
+            "counts",
+            "sizeFactor",
+            "dispersion",
+            "variance",
+        ),
+        domain="Symbol",
+        default_rolling=1,
+        tooltips={
+            "Time": "If there is no real time column, the row index acts as a pseudo time axis.",
+            "Performance": "Use log2 fold change, effect_size, or related statistics as output.",
+            "Energy": "Use padj, p_value, baseMean, or similar columns as cost or perturbation strength.",
+            "Domain": "Use the gene Symbol column to group per gene.",
+        },
+    ),
+
     "Physics Lab": Preset(
         name="Physics Lab",
         time=_kw("time", "t", "run", "shot"),
@@ -636,7 +686,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # --- Energy / Industry / Infra ---
+    # Energy, Industry, Infrastructure
     "Energy/Grid": Preset(
         name="Energy/Grid",
         time=_kw("time", "interval", "t"),
@@ -743,7 +793,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # --- Business / Data ---
+    # Business and Data
     "Finance": Preset(
         name="Finance",
         time=_kw("date", "time", "t", "bar", "index"),
@@ -801,7 +851,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # --- Marketing (enhanced) ---
+    # Marketing
     "Marketing": Preset(
         name="Marketing",
         time=_kw(
@@ -872,7 +922,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # New super simple preset for non-technical marketers
+    # Simple marketing preset
     "Marketing Simple": Preset(
         name="Marketing Simple",
         time=_kw(
@@ -1011,7 +1061,7 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
-    # --- Supply / Mobility ---
+    # Supply and Mobility
     "Supply Chain": Preset(
         name="Supply Chain",
         time=_kw("date", "time", "week", "month"),
