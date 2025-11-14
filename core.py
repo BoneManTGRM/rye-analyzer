@@ -12,6 +12,8 @@
 from __future__ import annotations
 import io
 import re
+import zipfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Union, Any
 
@@ -679,23 +681,162 @@ DOMAIN_ALIASES: List[str] = list(COLUMN_ALIASES.get("domain", []))
 # File IO
 # ------------------------------
 def _read_text_table(text: str) -> pd.DataFrame:
-    # guard for empty uploads
+    """
+    Generic CSV/TSV reader for raw text blobs.
+    Uses a quick heuristic: if the first line has tabs and no commas,
+    treat as TSV, otherwise treat as CSV.
+    """
     if not text or not text.strip():
         raise EmptyDataError("Uploaded text file is empty.")
-    first = text.splitlines()[0] if text.splitlines() else ""
+    lines = text.splitlines()
+    first = lines[0] if lines else ""
     sep = "\t" if ("\t" in text and "," not in first) else ","
     return pd.read_csv(io.StringIO(text), sep=sep)
 
+
+def _load_dwc_archive_from_filelike(file_like) -> pd.DataFrame:
+    """
+    Best-effort Darwin Core Archive (DwC-A) loader.
+
+    Expects a zip-like object. If a meta.xml file is present, use it to locate
+    the core table. Otherwise, fall back to the first .txt file in the archive.
+    """
+    file_like.seek(0)
+    with zipfile.ZipFile(file_like) as z:
+        names = z.namelist()
+        core_name: Optional[str] = None
+
+        # Try meta.xml if available
+        if "meta.xml" in names:
+            try:
+                meta_bytes = z.read("meta.xml")
+                root = ET.fromstring(meta_bytes)
+                ns = {"dwc": "http://rs.tdwg.org/dwc/text/"}
+                core = root.find("dwc:core", ns)
+                if core is not None:
+                    files_elem = core.find("dwc:files", ns)
+                    if files_elem is not None:
+                        loc = files_elem.find("dwc:location", ns)
+                        if loc is not None and loc.text:
+                            core_name = loc.text.strip()
+            except Exception:
+                core_name = None
+
+        # Fallback: first .txt file
+        if core_name is None:
+            txt_names = [n for n in names if n.lower().endswith(".txt")]
+            if txt_names:
+                core_name = txt_names[0]
+
+        if core_name is None:
+            raise ValueError(
+                "Zip archive does not look like a Darwin Core Archive "
+                "(no meta.xml or .txt table found)."
+            )
+
+        with z.open(core_name) as f:
+            text = f.read().decode("utf-8", errors="replace")
+            return _read_text_table(text)
+
+
+def _load_eml_from_bytes(data: bytes) -> pd.DataFrame:
+    """
+    Very simple EML handler.
+
+    Many .eml files in ecology are metadata only. Here we try to interpret the
+    file as a delimited text table; if that fails, raise a clear message so the
+    user knows they should export a CSV or DwC-A instead.
+    """
+    text = data.decode("utf-8", errors="replace")
+    try:
+        return _read_text_table(text)
+    except Exception as e:
+        raise ValueError(
+            "This EML file appears to be metadata, not a tabular dataset. "
+            "Please export the underlying data table as CSV or DwC-A."
+        ) from e
+
+
+def _load_rtf_from_bytes(data: bytes) -> pd.DataFrame:
+    """
+    Best-effort RTF loader.
+
+    Strip common RTF control sequences in a naive way and then attempt to parse
+    as a delimited text table. This will only work if the RTF actually contains
+    a simple table exported as text.
+    """
+    text = data.decode("utf-8", errors="replace")
+    # Rough stripping of common RTF control sequences
+    text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", text)  # hex escapes
+    text = re.sub(r"\\[a-zA-Z]+-?\d* ?", " ", text)  # control words
+    text = re.sub(r"[{}]", " ", text)  # group braces
+    try:
+        return _read_text_table(text)
+    except Exception as e:
+        raise ValueError(
+            "Could not interpret this RTF as a tabular dataset. "
+            "If it contains a table, please export it as CSV."
+        ) from e
+
+
+def _load_special_from_bytes(data: bytes, name: str) -> Optional[pd.DataFrame]:
+    """
+    Handle special formats that are not plain CSV/TSV/Excel/etc:
+      - Darwin Core Archive (.zip, .dwc, .dwca, .dwc-a)
+      - EML (.eml)
+      - RTF (.rtf)
+    Returns a DataFrame on success, or None to signal "fall back to normal".
+    """
+    lower = name.lower()
+
+    # DwC-A (zip-based Darwin Core Archive)
+    if lower.endswith((".zip", ".dwc", ".dwca", ".dwc-a")):
+        buf = io.BytesIO(data)
+        try:
+            return _load_dwc_archive_from_filelike(buf)
+        except Exception:
+            # If it's just a generic zip or an unexpected layout,
+            # fall through to normal handling.
+            return None
+
+    # EML metadata / text
+    if lower.endswith(".eml"):
+        try:
+            return _load_eml_from_bytes(data)
+        except Exception:
+            return None
+
+    # RTF text
+    if lower.endswith(".rtf"):
+        try:
+            return _load_rtf_from_bytes(data)
+        except Exception:
+            return None
+
+    return None
+
+
 def load_table(src) -> pd.DataFrame:
     """
-    Read CSV/TSV/XLS/XLSX. If the filename suggests another format, try it too.
-    Falls back to CSV or TSV sniffing on failure.
+    Read CSV/TSV/XLS/XLSX plus optional Parquet/Feather/JSON/NDJSON/HDF5/Arrow/NetCDF.
+
+    New behavior:
+      - If the upload looks like a Darwin Core Archive (.zip/.dwc/.dwca/.dwc-a),
+        try to parse it via meta.xml or the first .txt file.
+      - If the upload is .eml or .rtf, attempt a best-effort text-table parse
+        and raise a clear error if it's metadata-only.
     """
     # Uploaded file like Streamlit's UploadedFile
     if hasattr(src, "read") and not isinstance(src, (str, bytes)):
         data = src.read()
         name = getattr(src, "name", "upload")
         lower = name.lower()
+
+        # Special formats first (DwC-A zip, EML, RTF)
+        special_df = _load_special_from_bytes(data, name)
+        if special_df is not None:
+            return special_df
+
         buf = io.BytesIO(data)
 
         if lower.endswith((".xls", ".xlsx")):
@@ -708,6 +849,7 @@ def load_table(src) -> pd.DataFrame:
                 return pd.read_feather(buf)
             if lower.endswith(".arrow"):
                 import pyarrow.ipc as ipc  # type: ignore
+
                 reader = ipc.RecordBatchFileReader(buf)
                 table = reader.read_all()
                 return table.to_pandas()  # type: ignore
@@ -721,17 +863,30 @@ def load_table(src) -> pd.DataFrame:
                     return pd.read_json(buf)
             if lower.endswith((".nc", ".netcdf")):
                 import xarray as xr  # type: ignore
+
                 ds = xr.open_dataset(buf)
                 return ds.to_dataframe().reset_index()
         except Exception:
             pass
 
+        # Generic text fall-back (CSV or TSV)
         text = data.decode("utf-8", errors="replace")
         return _read_text_table(text)
 
     # Pathlike
     path = str(src)
     lower = path.lower()
+
+    # Special formats from disk
+    if lower.endswith((".zip", ".dwc", ".dwca", ".dwc-a")):
+        with open(path, "rb") as f:
+            return _load_dwc_archive_from_filelike(f)
+    if lower.endswith(".eml"):
+        with open(path, "rb") as f:
+            return _load_eml_from_bytes(f.read())
+    if lower.endswith(".rtf"):
+        with open(path, "rb") as f:
+            return _load_rtf_from_bytes(f.read())
 
     if lower.endswith((".xls", ".xlsx")):
         return pd.read_excel(path)
@@ -743,6 +898,7 @@ def load_table(src) -> pd.DataFrame:
             return pd.read_feather(path)
         if lower.endswith(".arrow"):
             import pyarrow.ipc as ipc  # type: ignore
+
             with open(path, "rb") as f:
                 reader = ipc.RecordBatchFileReader(f)
                 table = reader.read_all()
@@ -756,11 +912,13 @@ def load_table(src) -> pd.DataFrame:
                 return pd.read_json(path)
         if lower.endswith((".nc", ".netcdf")):
             import xarray as xr  # type: ignore
+
             ds = xr.open_dataset(path)
             return ds.to_dataframe().reset_index()
     except Exception:
         pass
 
+    # Final CSV/TSV fallback
     try:
         return pd.read_csv(path)
     except Exception:
