@@ -154,7 +154,8 @@ estimate_noise_floor = getattr(_core_mod, "estimate_noise_floor", None)
 bootstrap_rolling_mean = getattr(_core_mod, "bootstrap_rolling_mean", None)
 
 # ---------------- Translation helpers ----------------
-language = "English"  # default; will be updated from sidebar later
+# Persist language choice across reruns so top-of-page text also respects it
+language = st.session_state.get("language_choice", "English")
 
 
 def tr(en: str, es: str) -> str:
@@ -244,6 +245,46 @@ with st.expander(tr("What is RYE?", "¿Qué es RYE?")):
         )
     )
 
+# ---------- New: quick purpose selector so Erika / marketers / scientists see their context ----------
+rye_purpose = st.selectbox(
+    tr("I am using RYE for", "Estoy usando RYE para"),
+    [
+        tr("Scientific / omics / experiments", "Experimentos científicos / ómicos"),
+        tr("Marketing / growth / campaigns", "Campañas de marketing / crecimiento"),
+        tr("Other systems or general diagnosis", "Otros sistemas o diagnóstico general"),
+    ],
+    index=0,
+)
+st.session_state["rye_purpose"] = rye_purpose
+
+if rye_purpose.startswith("Scientific") or rye_purpose.startswith("Experimentos"):
+    st.info(
+        tr(
+            "Interpret RYE as improvement in a biological or scientific signal per unit of cost or perturbation "
+            "(for example log2FC change per unit of padj, or stability gain per joule).",
+            "Interpreta RYE como la mejora de una señal biológica o científica por unidad de costo o perturbación "
+            "(por ejemplo cambio en log2FC por unidad de padj, o ganancia de estabilidad por joule).",
+        )
+    )
+elif rye_purpose.startswith("Marketing") or rye_purpose.startswith("Campañas"):
+    st.info(
+        tr(
+            "Interpret RYE as outcome per unit of spend: more conversions, revenue or retention for each unit of "
+            "budget, impressions or touches.",
+            "Interpreta RYE como resultado por unidad de gasto: más conversiones, ingresos o retención por cada "
+            "unidad de presupuesto, impresiones o contactos.",
+        )
+    )
+else:
+    st.info(
+        tr(
+            "Use RYE as a general efficiency lens: how much repair or performance gain do you get per unit of "
+            "energy, time or effort invested.",
+            "Usa RYE como una lente general de eficiencia: cuánta reparación o mejora de desempeño obtienes por "
+            "cada unidad de energía, tiempo o esfuerzo invertido.",
+        )
+    )
+
 # ---------------- Seed session_state BEFORE widgets ----------------
 _default_preset_name = list(PRESETS.keys())[0]
 _default_preset = PRESETS.get(_default_preset_name, next(iter(PRESETS.values())))
@@ -271,6 +312,8 @@ with st.sidebar:
         ["English", "Español"],
         index=0,
     )
+    # persist language choice so top-of-page strings also follow it
+    st.session_state["language_choice"] = language
 
     st.header(tr("Inputs", "Entradas"))
 
@@ -767,9 +810,8 @@ def load_any(file) -> Optional[pd.DataFrame]:
         st.error(tr(f"Could not read file. {e}", f"No se pudo leer el archivo. {e}"))
         st.code(traceback.format_exc(), language="text")
         return None
-          return None
 
-# ← IMPORTANT: def must start at the LEFT MARGIN (no indentation)
+
 def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
     """
     Ensure the requested repair/energy columns exist.
@@ -1241,7 +1283,9 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
             )
 
     return " ".join(lines)
-    def make_quick_summary(summary: dict, w: int, preset_name: str) -> str:
+
+
+def make_quick_summary(summary: dict, w: int, preset_name: str) -> str:
     """
     Short 1 to 2 sentence summary for the top of the report.
     This is what Erika or any scientist can read in 3 seconds.
@@ -1540,7 +1584,8 @@ with tab1:
                 file_name="summary.json",
                 mime="application/json",
             )
-            # ---------- Tab 2 ----------
+
+# ---------- Tab 2 ----------
 with tab2:
     if df1 is None or df2 is None:
         st.info(tr("Upload two files to compare.", "Sube dos archivos para comparar."))
