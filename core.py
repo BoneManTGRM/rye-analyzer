@@ -310,7 +310,7 @@ except Exception:
             tooltips={
                 "Time": "Use time or sample_index if available; if not, the row index can be treated as a run index.",
                 "Performance": "Use log2 fold change or effect_size as your signal of change.",
-                "Energy": "Use dose, concentration, or padj as a proxy cost / stress level.",
+                "Energy": "Use dose, concentration, or padj as a proxy cost or stress level.",
                 "Domain": "Group by symbol or gene_id to see per-gene repair patterns.",
             },
         ),
@@ -366,7 +366,24 @@ except Exception:
 # ------------------------------
 # Column aliases for inference
 # ------------------------------
-COLUMN_ALIASES: Dict[str, List[str]] = {
+def _dedupe_str(seq: Sequence[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for x in seq:
+        if x is None:
+            continue
+        s = str(x).strip()
+        if not s:
+            continue
+        s_lower = s.lower()
+        if s_lower in seen:
+            continue
+        seen.add(s_lower)
+        out.append(s_lower)
+    return out
+
+# Base seeds that already work well with existing datasets
+_BASE_COLUMN_ALIASES: Dict[str, List[str]] = {
     "time": [
         "time",
         "t",
@@ -449,7 +466,7 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "herbivore_biomass_kg",
         "aragonite_saturation_state",
         "gross_primary_prod_g_c_m2_day",
-        # marketing / web
+        # marketing and web
         "ctr",
         "click_through_rate",
         "conversion_rate",
@@ -466,7 +483,7 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "trial_rate",
         "mql_rate",
         "sql_rate",
-        # extra marketing outcomes for better auto detect
+        # extra marketing outcomes
         "conversions",
         "revenue",
         "sales",
@@ -481,13 +498,13 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "engagement_rate",
         "bounce_rate_inv",
         "unsub_rate_inv",
-        # omics / DESeq2 style
+        # omics and DESeq2
         "log2fc",
         "log2_fold_change",
         "c19_c_log2fc",
         "c19_p_log2fc",
         "effect_size",
-        # robotics / control
+        # robotics and control
         "task_success",
         "success_rate",
         "stability",
@@ -548,7 +565,7 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "survey_minutes",
         "dissolved_inorganic_carbon_umol_kg",
         "ecosystem_respiration_g_c_m2_day",
-        # marketing / business
+        # marketing and business
         "spend",
         "ad_spend",
         "media_spend",
@@ -566,10 +583,10 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "traffic",
         "sms_sent",
         "messages_sent",
-        # omics / DESeq2 style cost / stress
+        # omics and DESeq2 style cost or stress
         "padj",
         "pvalue",
-        # robotics / hardware
+        # robotics and hardware
         "motor_current",
         "joint_torque",
         "control_effort",
@@ -597,17 +614,16 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "patient_id",
         "arm",
         "cohort",
-        # omics / users
+        # omics and users
         "symbol",
         "ensembl_id",
         "gene",
         "gene_id",
         "user_id",
-        # marketing / business
+        # marketing and business
         "campaign",
         "channel",
         "segment",
-        "cohort",
         "creative",
         "ad_group",
         "placement",
@@ -619,7 +635,7 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "store",
         "lane",
         "line",
-        # robotics / infra / others
+        # robotics and infra
         "robot_id",
         "airframe_id",
         "asset_id",
@@ -630,37 +646,34 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
     ],
 }
 
-# Separate domain alias list for multi-domain logic (used by app layer)
-DOMAIN_ALIASES: List[str] = [
-    "run_id",
-    "run",
-    "experiment",
-    "condition",
-    "plate",
-    "station",
-    "sample_id",
-    "subject_id",
-    "patient_id",
-    "group",
-    "arm",
-    "cohort",
-    "symbol",
-    "ensembl_id",
-    "gene",
-    "gene_id",
-    "user_id",
-    "campaign",
-    "channel",
-    "segment",
-    "service",
-    "property",
-    "store",
-    "line",
-    "lane",
-    "strategy",
-    "country",
-    "region",
-]
+# Start aliases from base seeds
+_COLUMN_ALIASES_WORK: Dict[str, List[str]] = {
+    "time": list(_BASE_COLUMN_ALIASES["time"]),
+    "performance": list(_BASE_COLUMN_ALIASES["performance"]),
+    "energy": list(_BASE_COLUMN_ALIASES["energy"]),
+    "domain": list(_BASE_COLUMN_ALIASES["domain"]),
+}
+
+# Enrich aliases with everything defined in PRESETS (including large 100 column lists)
+for _preset in PRESETS.values():
+    try:
+        _COLUMN_ALIASES_WORK["time"].extend(getattr(_preset, "time", []) or [])
+        _COLUMN_ALIASES_WORK["performance"].extend(getattr(_preset, "performance", []) or [])
+        _COLUMN_ALIASES_WORK["energy"].extend(getattr(_preset, "energy", []) or [])
+        dom_name = getattr(_preset, "domain", None)
+        if dom_name:
+            _COLUMN_ALIASES_WORK["domain"].append(dom_name)
+    except Exception:
+        # If a preset is odd shaped, just skip enrichment for it
+        continue
+
+# Final deduped, lowercased alias map used by inference and app layers
+COLUMN_ALIASES: Dict[str, List[str]] = {
+    k: _dedupe_str(v) for k, v in _COLUMN_ALIASES_WORK.items()
+}
+
+# Separate domain alias list for multi domain logic (used by app layer)
+DOMAIN_ALIASES: List[str] = list(COLUMN_ALIASES.get("domain", []))
 
 # ------------------------------
 # File IO
@@ -793,7 +806,7 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def _best_match(df_cols: Sequence[str], candidates: Sequence[str]) -> Optional[str]:
     """
-    Best-effort match:
+    Best effort match:
       1) Exact case-insensitive match
       2) Substring match (alias contained in column name)
     """
@@ -923,8 +936,8 @@ def compute_rye_from_df(
     """
     RYE per step = max(delta performance, 0) divided by max(energy, energy_floor)
 
-    repair_col: column with performance / repair signal
-    energy_col: column with effort / cost / energy / tokens / spend
+    repair_col: column with performance or repair signal
+    energy_col: column with effort or cost or energy or tokens or spend
     time_col:   currently unused, kept for future time-aware variants
 
     Set clamp_negative_delta=False to allow negative deltas.
@@ -962,9 +975,9 @@ def compute_rye(
     **kwargs,
 ) -> np.ndarray:
     """
-    Backwards-compatible wrapper.
+    Backwards compatible wrapper.
 
-    Older code may call compute_rye(df) expecting accuracy/tokens.
+    Older code may call compute_rye(df) expecting accuracy or tokens.
     This wrapper:
       - maps accuracy to performance and tokens to energy when needed
       - raises a clear error only if no suitable columns exist
