@@ -1,11 +1,14 @@
 # app_streamlit.py
 # RYE Analyzer - rich, mobile-friendly Streamlit app with:
 # Multi-format ingest • Presets & tooltips • Auto column detect • Auto rolling window
-# Single / Compare / Multi-domain / Reports tabs • Diagnostics & PDF reporting
+# Single / Compare • Multi-domain • Reports tabs • Diagnostics & PDF reporting
 
 from __future__ import annotations
 import io, json, os, sys, traceback, importlib.util, importlib.machinery
 from typing import Optional, Dict, Any
+
+import gzip
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -306,24 +309,12 @@ with st.sidebar:
             "Sube un archivo para analizar. Opcionalmente puedes subir un segundo archivo para comparar.",
         )
     )
-    file_types = [
-        "csv",
-        "tsv",
-        "xls",
-        "xlsx",
-        "parquet",
-        "feather",
-        "json",
-        "ndjson",
-        "h5",
-        "hdf5",
-        "nc",
-        "netcdf",
-    ]
-    file1 = st.file_uploader(tr("Primary file", "Archivo principal"), type=file_types, key="file1")
+
+    # Accept any file type; load_any will decide how to parse or fail gracefully
+    file1 = st.file_uploader(tr("Primary file", "Archivo principal"), type=None, key="file1")
     file2 = st.file_uploader(
         tr("Comparison file (optional)", "Archivo de comparación (opcional)"),
-        type=file_types,
+        type=None,
         key="file2",
     )
 
@@ -334,9 +325,7 @@ with st.sidebar:
             df_preview = load_table(file1)
             df_preview = normalize_columns(df_preview)
         except Exception:
-            # soft fail; load_any will show full error later if needed
             df_preview = None
-        # reset file pointer so load_any(file1) can read again later
         try:
             file1.seek(0)
         except Exception:
@@ -360,7 +349,6 @@ with st.sidebar:
                 st.session_state["col_energy"] = guess["energy"]
             st.session_state["auto_columns_applied"] = True
         except Exception:
-            # fail silently; manual input still works
             pass
 
     st.divider()
@@ -531,12 +519,105 @@ with st.sidebar:
         )
 
 # ---------------- Core workers ----------------
+def _decompress_gzip_to_bytes_io(file, original_name: str) -> io.BytesIO:
+    """Decompress a gzip UploadedFile or buffer into a BytesIO and preserve an inner name."""
+    try:
+        with gzip.GzipFile(fileobj=file) as gz:
+            data = gz.read()
+        inner = io.BytesIO(data)
+        # strip .gz if present so downstream logic sees the real extension
+        if original_name.lower().endswith(".gz"):
+            inner.name = original_name[:-3]  # type: ignore[attr-defined]
+        else:
+            inner.name = original_name  # type: ignore[attr-defined]
+        inner.seek(0)
+        return inner
+    except Exception as e:
+        st.error(
+            tr(
+                f"Could not decompress gzip file: {e}",
+                f"No se pudo descomprimir el archivo gzip: {e}",
+            )
+        )
+        raise
+
+
+def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.BytesIO]:
+    """
+    Extract a useful inner file from a zip.
+    Priority:
+      1) occurrence.txt (DwC-A)
+      2) event.txt, emof.txt
+      3) any csv, tsv, txt
+      4) any nc, netcdf, json
+    Returns BytesIO or None.
+    """
+    try:
+        with zipfile.ZipFile(file) as zf:
+            names = zf.namelist()
+            target = None
+
+            preferred = [
+                "occurrence.txt",
+                "event.txt",
+                "emof.txt",
+            ]
+            lower_map = {n.lower(): n for n in names}
+
+            for cand in preferred:
+                if cand in lower_map:
+                    target = lower_map[cand]
+                    break
+
+            if target is None:
+                for ext in (".csv", ".tsv", ".txt"):
+                    matches = [n for n in names if n.lower().endswith(ext)]
+                    if matches:
+                        target = matches[0]
+                        break
+
+            if target is None:
+                for ext in (".nc", ".netcdf", ".json"):
+                    matches = [n for n in names if n.lower().endswith(ext)]
+                    if matches:
+                        target = matches[0]
+                        break
+
+            if target is None:
+                st.error(
+                    tr(
+                        "Zip archive found but no tabular or NetCDF file could be identified.",
+                        "Se encontró un archivo zip pero no se identificó ningún archivo tabular o NetCDF.",
+                    )
+                )
+                return None
+
+            with zf.open(target) as inner_file:
+                data = inner_file.read()
+
+        inner = io.BytesIO(data)
+        inner.name = target  # type: ignore[attr-defined]
+        inner.seek(0)
+        return inner
+    except Exception as e:
+        st.error(
+            tr(
+                f"Could not read zip archive: {e}",
+                f"No se pudo leer el archivo zip: {e}",
+            )
+        )
+        st.code(traceback.format_exc(), language="text")
+        return None
+
+
 def load_any(file) -> Optional[pd.DataFrame]:
     """
     Safe loader for user files:
-    - Explicit Excel support (.xlsx, .xls) using pandas.read_excel
-    - CSV and TSV support
-    - Fallback to core.load_table for other formats
+    - Handles Excel, CSV, TSV, TXT
+    - Handles gzip compressed files (.gz) by decompressing then delegating
+    - Handles zip archives (.zip), with DwC-A or a single CSV/TSV/TXT/NetCDF inside
+    - Attempts XML to table when possible
+    - Delegates complex or remaining formats to core.load_table
     - Rejects very large uploads (> 200 MB) to avoid exhausting memory
     - Caps extremely large tables to 1,000,000 rows to avoid crashes
     """
@@ -555,28 +636,107 @@ def load_any(file) -> Optional[pd.DataFrame]:
             )
             return None
     except Exception:
-        # If size check fails, just continue and let pandas or xarray handle it
         pass
 
-    filename = getattr(file, "name", "").lower()
+    filename = getattr(file, "name", "")
+    name_lower = filename.lower() if filename else ""
 
+    # Handle gzip compressed files by decompressing then recursing
+    if name_lower.endswith(".gz"):
+        try:
+            inner = _decompress_gzip_to_bytes_io(file, filename)
+            return load_any(inner)
+        except Exception:
+            return None
+
+    # Handle zip archives by extracting a useful inner file then recursing
+    if name_lower.endswith(".zip"):
+        inner = _extract_from_zip_to_bytes_io(file, filename)
+        if inner is None:
+            return None
+        return load_any(inner)
+
+    # At this point we deal with the actual data file
     try:
-        # Excel first, since that is what Erika is using
-        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+        # Excel
+        if name_lower.endswith(".xlsx") or name_lower.endswith(".xls"):
             try:
                 df = pd.read_excel(file, engine="openpyxl")
             except Exception:
-                # Fallback if openpyxl is not available
                 df = pd.read_excel(file)
 
-        # Plain CSV and TSV as a backup path
-        elif filename.endswith(".csv"):
+        # CSV and TSV
+        elif name_lower.endswith(".csv"):
             df = pd.read_csv(file)
-        elif filename.endswith(".tsv"):
+        elif name_lower.endswith(".tsv"):
             df = pd.read_csv(file, sep="\t")
 
-        # Everything else goes through the core loader
+        # Generic text: try auto separator, then fall back to tab
+        elif name_lower.endswith(".txt"):
+            try:
+                df = pd.read_csv(file, sep=None, engine="python")
+            except Exception:
+                file.seek(0)
+                df = pd.read_csv(file, sep="\t")
+
+        # XML: try pandas read_xml which works for many simple structures
+        elif name_lower.endswith(".xml"):
+            try:
+                df = pd.read_xml(file)
+            except Exception as e:
+                st.error(
+                    tr(
+                        f"Could not parse XML as a table: {e}",
+                        f"No se pudo convertir el XML en una tabla: {e}",
+                    )
+                )
+                st.code(traceback.format_exc(), language="text")
+                return None
+
+        # GeoJSON and GML: prefer geopandas if installed
+        elif name_lower.endswith(".geojson") or name_lower.endswith(".json") and "geojson" in name_lower:
+            try:
+                import geopandas as gpd  # type: ignore
+
+                gdf = gpd.read_file(file)
+                df = pd.DataFrame(gdf.drop(columns=gdf.geometry.name, errors="ignore"))
+            except Exception:
+                try:
+                    file.seek(0)
+                except Exception:
+                    pass
+                try:
+                    df = pd.read_json(file)
+                except Exception as e:
+                    st.error(
+                        tr(
+                            f"Could not read GeoJSON/JSON: {e}",
+                            f"No se pudo leer el GeoJSON/JSON: {e}",
+                        )
+                    )
+                    st.code(traceback.format_exc(), language="text")
+                    return None
+
+        elif name_lower.endswith(".gml"):
+            try:
+                import geopandas as gpd  # type: ignore
+
+                gdf = gpd.read_file(file)
+                df = pd.DataFrame(gdf.drop(columns=gdf.geometry.name, errors="ignore"))
+            except Exception as e:
+                st.error(
+                    tr(
+                        f"Could not read GML. Install geopandas to support this format. Error: {e}",
+                        f"No se pudo leer GML. Instala geopandas para soportar este formato. Error: {e}",
+                    )
+                )
+                st.code(traceback.format_exc(), language="text")
+                return None
+
+        # NetCDF and similar, or anything else: delegate to core.load_table
         else:
+            # load_table in core.py is expected to handle:
+            # parquet, feather, json, ndjson, h5, hdf5, nc, netcdf, arrow, etc
             df = load_table(file)
 
         df = normalize_columns(df)
