@@ -187,6 +187,41 @@ def smart_window(n_rows: int, preset_default: Optional[int]) -> int:
     return guess
 
 
+def compute_reparodynamics_score(summary: dict) -> float:
+    """
+    Compact health index for Reparodynamics and TGRM:
+    maps RYE mean, resilience, and repair fractions into a 0 to 100 score.
+
+    It is designed to be robust even if some fields are missing.
+    """
+    def safe01(x) -> float:
+        try:
+            v = float(x)
+        except Exception:
+            return 0.0
+        if not np.isfinite(v):
+            return 0.0
+        return max(0.0, min(1.0, v))
+
+    mean_v = float(summary.get("mean", 0) or 0)
+    resil = safe01(summary.get("resilience", 0))
+    nz_frac = safe01(summary.get("nonzero_fraction", 0))
+    pos_frac = safe01(summary.get("positive_fraction", 0))
+
+    # Map RYE mean to a 0 to 1 band with a soft clamp
+    # treat mean around 0.6 to 0.8 as very healthy, negative as weak
+    mean_clamped = max(-0.5, min(1.5, mean_v))
+    eff_norm = (mean_clamped + 0.5) / 2.0  # -0.5 -> 0, 1.5 -> 1
+
+    eff_score = eff_norm * 0.4
+    resil_score = resil * 0.3
+    pos_score = pos_frac * 0.2
+    nz_score = nz_frac * 0.1
+
+    total = (eff_score + resil_score + pos_score + nz_score) * 100.0
+    return float(round(max(0.0, min(100.0, total)), 1))
+
+
 # ---------------- PDF builder (optional) + diagnostics ----------------
 def _probe_fpdf_version() -> str:
     try:
@@ -1443,6 +1478,50 @@ with tab1:
                 help=tr("Stability of efficiency under fluctuation (if computed)", "Estabilidad de la eficiencia frente a fluctuaciones (si se calcula)"),
             )
 
+            # Reparodynamics / TGRM health gauge
+            reparo_score = compute_reparodynamics_score(summary)
+            st.subheader(tr("Reparodynamics TGRM gauge", "Indicador Reparodinámica TGRM"))
+            fig_gauge = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=reparo_score,
+                    number={"suffix": " / 100"},
+                    title={
+                        "text": tr(
+                            "Self repair efficiency",
+                            "Eficiencia de autorreparación",
+                        )
+                    },
+                    gauge={
+                        "axis": {"range": [0, 100]},
+                        "steps": [
+                            {"range": [0, 30], "color": "#ffcccc"},
+                            {"range": [30, 60], "color": "#fff0b3"},
+                            {"range": [60, 80], "color": "#e0f2f1"},
+                            {"range": [80, 100], "color": "#c8e6c9"},
+                        ],
+                        "threshold": {
+                            "line": {"width": 3, "color": "black"},
+                            "thickness": 0.75,
+                            "value": reparo_score,
+                        },
+                    },
+                )
+            )
+            st.plotly_chart(fig_gauge, use_container_width=True)
+            if language == "Español":
+                st.caption(
+                    "Este indicador resume qué tan bien está funcionando el bucle TGRM "
+                    "(detectar, corregir con el mínimo cambio, verificar) usando RYE medio, resiliencia "
+                    "y la fracción de ciclos con reparación efectiva."
+                )
+            else:
+                st.caption(
+                    "This gauge summarizes how well the TGRM loop "
+                    "(detect, minimal repair, verify) is working using mean RYE, resilience, "
+                    "and the share of cycles that deliver effective repair."
+                )
+
             if marketing_mode:
                 st.caption(
                     tr(
@@ -1798,7 +1877,8 @@ with tab3:
 
         # 3) aliases from DOMAIN_ALIASES then COLUMN_ALIASES["domain"], if provided
         if effective_domain_col is None:
-            alias_list: list[str] = []
+            alias_list: list[str] = {}
+            alias_list = []
             if isinstance(DOMAIN_ALIASES, (list, tuple)):
                 alias_list.extend([str(a) for a in DOMAIN_ALIASES])
             alias_list.extend(COLUMN_ALIASES.get("domain", []))
@@ -1865,6 +1945,9 @@ with tab4:
             st.subheader(tr("Quick summary", "Resumen rápido"))
             st.write(quick_summary)
 
+            # recompute Reparodynamics score here for the metadata
+            reparo_score_report = compute_reparodynamics_score(summary)
+
             domain_meta_col = ""
             effective_dom = st.session_state.get("effective_domain_col")
             if effective_dom and effective_dom in df1.columns:
@@ -1882,6 +1965,7 @@ with tab4:
                 "rolling_window": w,
                 "columns": list(df1.columns),
                 "quick_summary": quick_summary,
+                "reparodynamics_score": reparo_score_report,
             }
             if marketing_mode:
                 metadata["use_case"] = "marketing_efficiency"
