@@ -1,46 +1,84 @@
-# 🧠 RYE Analyzer
+# 🧠 RYE Analyzer  
+Repair Yield per Energy (RYE) is a universal metric for measuring how efficiently a system converts energy or effort into repair or improvement.  
+The RYE Analyzer implements the Reparodynamics framework created by Cody Ryan Jenkins.
 
-**Compute Repair Yield per Energy (RYE)** — an open-science metric that measures how efficiently a system converts effort or energy into repair or performance improvement.
+![banner](banner.png)
 
-The RYE Analyzer implements the **Reparodynamics** framework developed by **Cody Ryan Jenkins** (Open Science / CC-BY-4.0).
+🔗 Live App  
+https://rye-analyzer-live.streamlit.app/
 
-🔗 **Live App:** [https://rye-analyzer-live.streamlit.app/](https://rye-analyzer-live.streamlit.app/)
+![License](https://img.shields.io/badge/License-Dual-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.9%2B-green.svg)
+![Streamlit](https://img.shields.io/badge/Streamlit-Ready-orange.svg)
+![OpenScience](https://img.shields.io/badge/Open%20Science-Supported-brightgreen.svg)
 
 ---
 
 ## 🚀 Features
-
-- Single CSV analysis  
-- Compare two datasets (before/after)  
-- Multi-domain presets: **AI**, **Biology**, and **Robotics**  
-- Energy simulator (test ΔEnergy scenarios)  
-- Rolling window smoothing  
-- Automatic summary metrics and RYE scorecard  
-- Downloadable **CSV**, **JSON**, and **Unicode-safe PDF reports**  
-- Clickable **Zenodo DOI / dataset link** embedded inside PDFs  
-- Built-in example dataset  
-- Streamlit UI — fully interactive and mobile-friendly  
+- Single file analysis with automatic column detection  
+- A and B dataset comparison  
+- Multi domain presets for AI, Biology, Robotics, Marketing, and General Systems  
+- Energy simulator for hypothetical energy changes  
+- Rolling, EMA, and cumulative smoothing  
+- RYE scorecard and Reparodynamics or TGRM gauge  
+- Phase classification (high efficiency, stable, mixed, decreasing, collapse)  
+- Collapse prediction based on linear trend  
+- Efficiency frontier regression  
+- Noise floor and stability diagnostics  
+- Enriched CSV, JSON, and Unicode safe PDF export  
+- PDF reports include clickable DOI or dataset link  
+- Supports CSV, TSV, Excel, JSON, ZIP, GZ, Darwin Core archives  
+- Interactive Streamlit UI that works on mobile and desktop  
+- Comes with a built in example dataset
 
 ---
 
 ## 🧩 How to Use
 
-1. **Upload a CSV file** containing:
-   - `performance` — repair or output metric  
-   - `energy` — effort, time, or energy input  
-   - *(Optional)* `time`, `domain`
-2. Adjust the **rolling window** and **energy multiplier** in the sidebar.  
-3. View **plots**, **summary statistics**, and **download** your results.  
-4. *(Optional)* Upload a second CSV to compare datasets.  
-5. *(Optional)* Enter a **Zenodo DOI or dataset URL** to embed a clickable link inside your PDF report.  
+### 1. Upload your dataset  
+Required columns:  
+- performance  
+- energy  
 
-If you don’t have data yet, click **“Download example CSV”** to start testing.
+Optional:  
+- time  
+- domain  
+
+The Analyzer will attempt to infer columns automatically.
+
+### 2. Adjust settings  
+- Rolling window  
+- EMA smoothing  
+- Energy multiplier  
+- Domain preset selection  
+
+### 3. Inspect results  
+- RYE curves  
+- Rolling and EMA smoothing  
+- Efficiency stability and frontier  
+- Noise diagnostics  
+- TGRM gauge  
+- Phase classification  
+- Collapse prediction  
+
+### 4. Compare datasets  
+Upload a second file to evaluate changes in resilience, collapse risk, efficiency, and RYE deltas.
+
+### 5. Export results  
+Download:  
+- enriched CSV  
+- summary JSON  
+- extended JSON with phase and collapse information  
+- full Unicode safe PDF with metadata  
+
+### 6. Try without data  
+Use the built in example dataset.
 
 ---
 
-## ⚙️ Installation (Local)
+## ⚙️ Installation
 
-```bash
+```sh
 git clone https://github.com/BoneManTGRM/rye-analyzer.git
 cd rye-analyzer
 pip install -r requirements.txt
