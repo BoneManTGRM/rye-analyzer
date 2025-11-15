@@ -599,16 +599,18 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
     """
     Extract a useful inner file from a zip.
 
-    Updated for Darwin Core Archives:
-      - Works even when occurrence.txt / event.txt / emof.txt live in subfolders.
-      - Falls back to the first CSV/TSV/TXT (by basename) if those are missing.
-      - Then falls back to NetCDF / JSON.
+    Darwin Core aware:
+      - If meta.xml is present, use the <core><files><location> target
+        as the primary table (event.txt, occurrence.txt, etc).
+      - Works even when those live in subfolders.
+      - If meta.xml is missing or parsing fails, fall back to simple rules.
 
     Priority:
-      1) occurrence.txt (DwC-A)
-      2) event.txt, emof.txt
-      3) any csv, tsv, txt
-      4) any nc, netcdf, json
+      0) DwC core from meta.xml (if available)
+      1) occurrence.txt, event.txt, emof.txt (by full path or basename)
+      2) any csv, tsv, txt
+      3) any nc, netcdf, json
+
     Returns BytesIO or None.
     """
     try:
@@ -623,39 +625,66 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
                 )
                 return None
 
-            # Map full lower-case path to actual path
+            # maps for case insensitive lookup
             full_lower_map = {n.lower(): n for n in names}
-            # Map lower-case basename to first occurrence of that basename
             base_lower_map: Dict[str, str] = {}
             for n in names:
                 base = os.path.basename(n).lower()
                 if base and base not in base_lower_map:
                     base_lower_map[base] = n
 
-            target = None
+            target: Optional[str] = None
 
-            # 1) Prefer DwC-A core tables by basename (handles folders like 'data/occurrence.txt')
-            preferred_basenames = [
-                "occurrence.txt",
-                "event.txt",
-                "emof.txt",
-            ]
-            for cand in preferred_basenames:
-                # check by full path first
-                if cand in full_lower_map:
-                    target = full_lower_map[cand]
-                    break
-                # then by basename
-                if cand in base_lower_map and target is None:
-                    target = base_lower_map[cand]
-                    break
+            # 0) Darwin Core meta.xml core detection
+            try:
+                meta_name = next(
+                    n for n in names if os.path.basename(n).lower() == "meta.xml"
+                )
+            except StopIteration:
+                meta_name = None
+
+            if meta_name is not None:
+                try:
+                    import xml.etree.ElementTree as ET
+
+                    with zf.open(meta_name) as mf:
+                        tree = ET.parse(mf)
+                    root = tree.getroot()
+                    ns = "{http://rs.tdwg.org/dwc/text/}"
+                    core_el = root.find(f"{ns}core")
+                    if core_el is not None:
+                        files_el = core_el.find(f"{ns}files")
+                        loc_el = files_el.find(f"{ns}location") if files_el is not None else None
+                        if loc_el is not None and (loc_el.text or "").strip():
+                            core_path = loc_el.text.strip()
+                            # try exact, then lower, then basename
+                            if core_path in names:
+                                target = core_path
+                            else:
+                                cand = full_lower_map.get(core_path.lower())
+                                if cand is None:
+                                    cand = base_lower_map.get(os.path.basename(core_path).lower())
+                                if cand is not None:
+                                    target = cand
+                except Exception:
+                    target = None
+
+            # 1) Prefer DwC-like tables by basename, if meta.xml did not give a target
+            if target is None:
+                preferred_basenames = ["occurrence.txt", "event.txt", "emof.txt"]
+                for cand in preferred_basenames:
+                    if cand in full_lower_map:
+                        target = full_lower_map[cand]
+                        break
+                    if cand in base_lower_map:
+                        target = base_lower_map[cand]
+                        break
 
             # 2) Otherwise pick any CSV/TSV/TXT by basename
             if target is None:
                 for ext in (".csv", ".tsv", ".txt"):
                     matches = [
-                        n
-                        for n in names
+                        n for n in names
                         if os.path.basename(n).lower().endswith(ext)
                     ]
                     if matches:
@@ -666,8 +695,7 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
             if target is None:
                 for ext in (".nc", ".netcdf", ".json"):
                     matches = [
-                        n
-                        for n in names
+                        n for n in names
                         if os.path.basename(n).lower().endswith(ext)
                     ]
                     if matches:
