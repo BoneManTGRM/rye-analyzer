@@ -182,7 +182,6 @@ def smart_window(n_rows: int, preset_default: Optional[int]) -> int:
         return int(preset_default)
     if n_rows <= 0:
         return 10
-    # about 5 percent of series length, clipped [3, 200]
     guess = max(3, min(200, int(round(max(3, n_rows * 0.05)))))
     return guess
 
@@ -191,9 +190,8 @@ def compute_reparodynamics_score(summary: dict) -> float:
     """
     Compact health index for Reparodynamics and TGRM:
     maps RYE mean, resilience, and repair fractions into a 0 to 100 score.
-
-    It is designed to be robust even if some fields are missing.
     """
+
     def safe01(x) -> float:
         try:
             v = float(x)
@@ -208,10 +206,8 @@ def compute_reparodynamics_score(summary: dict) -> float:
     nz_frac = safe01(summary.get("nonzero_fraction", 0))
     pos_frac = safe01(summary.get("positive_fraction", 0))
 
-    # Map RYE mean to a 0 to 1 band with a soft clamp
-    # treat mean around 0.6 to 0.8 as very healthy, negative as weak
     mean_clamped = max(-0.5, min(1.5, mean_v))
-    eff_norm = (mean_clamped + 0.5) / 2.0  # -0.5 -> 0, 1.5 -> 1
+    eff_norm = (mean_clamped + 0.5) / 2.0
 
     eff_score = eff_norm * 0.4
     resil_score = resil * 0.3
@@ -269,6 +265,64 @@ def _delta_performance(series):
     return s.diff().fillna(0.0).astype(float).values
 
 
+# --- New helper functions for phase classification and collapse prediction ---
+def classify_phase(rye_series):
+    """Classify repair efficiency phases for display."""
+    arr = np.asarray(rye_series, dtype=float)
+    if len(arr) < 3:
+        return "unknown"
+    mean_v = float(np.nanmean(arr))
+    x = np.arange(len(arr), dtype=float)
+    mask = np.isfinite(arr)
+    if mask.sum() > 1:
+        coef = np.polyfit(x[mask], arr[mask], 1)
+        slope = coef[0]
+    else:
+        slope = 0.0
+
+    if mean_v > 0.7 and slope >= 0:
+        return "high_efficiency"
+    if mean_v > 0.4 and slope >= 0:
+        return "stable"
+    if slope < -0.02:
+        return "decreasing"
+    if mean_v < 0.0 or (mean_v < 0.3 and slope < 0):
+        return "collapse"
+    return "mixed"
+
+
+def predict_collapse_time(rye_series, time_values=None, threshold=0.0):
+    """
+    Given a RYE time series and optional time axis, predict when it may reach a collapse threshold.
+    Uses simple linear extrapolation based on last portion of data.
+    Returns index or time of predicted crossing; returns None if trend is positive or unusable.
+    """
+    arr = np.asarray(rye_series, dtype=float)
+    if time_values is None:
+        time_values = np.arange(len(arr))
+    if len(arr) < 2:
+        return None
+
+    subset = slice(len(arr) // 2, len(arr))
+    x = np.asarray(time_values[subset], dtype=float)
+    y = arr[subset]
+
+    mask = np.isfinite(x) & np.isfinite(y)
+    if mask.sum() < 2:
+        return None
+
+    coef = np.polyfit(x[mask], y[mask], 1)
+    slope = coef[0]
+    intercept = coef[1]
+    if slope >= 0:
+        return None
+
+    t_pred = (threshold - intercept) / slope
+    if t_pred <= x[-1]:
+        return None
+    return t_pred
+
+
 def _first_or(default, lst):
     return lst[0] if isinstance(lst, list) and lst else default
 
@@ -290,7 +344,7 @@ with st.expander(tr("What is RYE?", "¿Qué es RYE?")):
         )
     )
 
-# ---------- New: quick purpose selector so Erika / marketers / scientists see their context ----------
+# quick purpose selector
 rye_purpose = st.selectbox(
     tr("I am using RYE for", "Estoy usando RYE para"),
     [
@@ -351,13 +405,11 @@ if "defaults_initialized" not in st.session_state:
 
 # ---------------- Sidebar (inputs) ----------------
 with st.sidebar:
-    # Language selector first so everything else can react
     language = st.selectbox(
         "Language / Idioma",
         ["English", "Español"],
         index=0,
     )
-    # persist language choice so top-of-page strings also follow it
     st.session_state["language_choice"] = language
 
     st.header(tr("Inputs", "Entradas"))
@@ -398,7 +450,6 @@ with st.sidebar:
         )
     )
 
-    # Accept any file type; load_any will decide how to parse or fail gracefully
     file1 = st.file_uploader(tr("Primary file", "Archivo principal"), type=None, key="file1")
     file2 = st.file_uploader(
         tr("Comparison file (optional)", "Archivo de comparación (opcional)"),
@@ -418,6 +469,22 @@ with st.sidebar:
             file1.seek(0)
         except Exception:
             pass
+
+    # Smart preset suggestion based on column names
+    suggested = None
+    if df_preview is not None:
+        cols_lower = [c.lower() for c in df_preview.columns]
+        if any(sub in cols_lower for sub in ["revenue", "conversion", "clicks", "impressions"]):
+            suggested = "Marketing"
+        elif any(sub in cols_lower for sub in ["gene", "omics", "sample", "experiment"]):
+            suggested = "Scientific"
+    if suggested:
+        st.caption(
+            tr(
+                f"Detected column names suggest the {suggested} preset.",
+                f"Las columnas parecen corresponder al preajuste {suggested}.",
+            )
+        )
 
     # Automatic one-time column inference after upload
     if (
@@ -442,7 +509,6 @@ with st.sidebar:
     st.divider()
     st.write(tr("Column names in your data", "Nombres de columnas en tus datos"))
 
-    # Manual auto detect button (safe, runs before text_input widgets)
     if st.button(tr("Auto-detect columns from data", "Detectar columnas automáticamente")):
         if _infer_columns is None:
             st.warning(
@@ -474,7 +540,6 @@ with st.sidebar:
                 st.error(tr(f"Auto-detect failed: {e}", f"La detección falló: {e}"))
                 st.code(traceback.format_exc(), language="text")
 
-    # Now create the widgets that read from session_state
     col_time = st.text_input(
         tr("Time column (optional)", "Columna de tiempo (opcional)"),
         value=st.session_state.get(
@@ -613,7 +678,6 @@ def _decompress_gzip_to_bytes_io(file, original_name: str) -> io.BytesIO:
         with gzip.GzipFile(fileobj=file) as gz:
             data = gz.read()
         inner = io.BytesIO(data)
-        # strip .gz if present so downstream logic sees the real extension
         if original_name.lower().endswith(".gz"):
             inner.name = original_name[:-3]  # type: ignore[attr-defined]
         else:
@@ -632,21 +696,7 @@ def _decompress_gzip_to_bytes_io(file, original_name: str) -> io.BytesIO:
 
 def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.BytesIO]:
     """
-    Extract a useful inner file from a zip.
-
-    Darwin Core aware:
-      - If meta.xml is present, use the <core><files><location> target
-        as the primary table (event.txt, occurrence.txt, etc).
-      - Works even when those live in subfolders.
-      - If meta.xml is missing or parsing fails, fall back to simple rules.
-
-    Priority:
-      0) DwC core from meta.xml (if available)
-      1) occurrence.txt, event.txt, emof.txt (by full path or basename)
-      2) any csv, tsv, txt
-      3) any nc, netcdf, json
-
-    Returns BytesIO or None.
+    Extract a useful inner file from a zip, with Darwin Core awareness.
     """
     try:
         with zipfile.ZipFile(file) as zf:
@@ -660,7 +710,6 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
                 )
                 return None
 
-            # maps for case insensitive lookup
             full_lower_map = {n.lower(): n for n in names}
             base_lower_map: Dict[str, str] = {}
             for n in names:
@@ -670,7 +719,6 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
 
             target: Optional[str] = None
 
-            # 0) Darwin Core meta.xml core detection
             try:
                 meta_name = next(
                     n for n in names if os.path.basename(n).lower() == "meta.xml"
@@ -692,7 +740,6 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
                         loc_el = files_el.find(f"{ns}location") if files_el is not None else None
                         if loc_el is not None and (loc_el.text or "").strip():
                             core_path = loc_el.text.strip()
-                            # try exact, then lower, then basename
                             if core_path in names:
                                 target = core_path
                             else:
@@ -704,7 +751,6 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
                 except Exception:
                     target = None
 
-            # 1) Prefer DwC-like tables by basename, if meta.xml did not give a target
             if target is None:
                 preferred_basenames = ["occurrence.txt", "event.txt", "emof.txt"]
                 for cand in preferred_basenames:
@@ -715,7 +761,6 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
                         target = base_lower_map[cand]
                         break
 
-            # 2) Otherwise pick any CSV/TSV/TXT by basename
             if target is None:
                 for ext in (".csv", ".tsv", ".txt"):
                     matches = [
@@ -726,7 +771,6 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
                         target = matches[0]
                         break
 
-            # 3) Otherwise pick NetCDF/JSON
             if target is None:
                 for ext in (".nc", ".netcdf", ".json"):
                     matches = [
@@ -766,20 +810,11 @@ def _extract_from_zip_to_bytes_io(file, original_name: str) -> Optional[io.Bytes
 
 def load_any(file) -> Optional[pd.DataFrame]:
     """
-    Safe loader for user files:
-    - Handles Excel, CSV, TSV, TXT
-    - Handles gzip compressed files (.gz) by decompressing then delegating
-    - Handles Darwin Core archives and general zip archives (.zip), with DwC-A
-      tables (occurrence.txt / event.txt / emof.txt) or a single CSV/TSV/TXT/NetCDF inside
-    - Attempts XML to table when possible
-    - Delegates complex or remaining formats to core.load_table
-    - Rejects very large uploads (> 200 MB) to avoid exhausting memory
-    - Caps extremely large tables to 1,000,000 rows to avoid crashes
+    Safe loader for user files.
     """
     if file is None:
         return None
 
-    # Basic size guard (works with Streamlit UploadedFile objects)
     max_size_mb = 200
     try:
         if hasattr(file, "size") and file.size and file.size > max_size_mb * 1024 * 1024:
@@ -796,7 +831,6 @@ def load_any(file) -> Optional[pd.DataFrame]:
     filename = getattr(file, "name", "")
     name_lower = filename.lower() if filename else ""
 
-    # Handle gzip compressed files by decompressing then recursing
     if name_lower.endswith(".gz"):
         try:
             inner = _decompress_gzip_to_bytes_io(file, filename)
@@ -804,29 +838,22 @@ def load_any(file) -> Optional[pd.DataFrame]:
         except Exception:
             return None
 
-    # Handle zip archives (including Darwin Core Archives)
     if name_lower.endswith(".zip"):
         inner = _extract_from_zip_to_bytes_io(file, filename)
         if inner is None:
             return None
         return load_any(inner)
 
-    # At this point we deal with the actual data file
     try:
-        # Excel
         if name_lower.endswith(".xlsx") or name_lower.endswith(".xls"):
             try:
                 df = pd.read_excel(file, engine="openpyxl")
             except Exception:
                 df = pd.read_excel(file)
-
-        # CSV and TSV
         elif name_lower.endswith(".csv"):
             df = pd.read_csv(file)
         elif name_lower.endswith(".tsv"):
             df = pd.read_csv(file, sep="\t")
-
-        # Generic text: try auto separator, then fall back to tab
         elif name_lower.endswith(".txt"):
             try:
                 df = pd.read_csv(file, sep=None, engine="python")
@@ -836,8 +863,6 @@ def load_any(file) -> Optional[pd.DataFrame]:
                 except Exception:
                     pass
                 df = pd.read_csv(file, sep="\t")
-
-        # XML: try pandas read_xml which works for many simple structures
         elif name_lower.endswith(".xml"):
             try:
                 df = pd.read_xml(file)
@@ -850,9 +875,7 @@ def load_any(file) -> Optional[pd.DataFrame]:
                 )
                 st.code(traceback.format_exc(), language="text")
                 return None
-
-        # GeoJSON and GML: prefer geopandas if installed
-        elif name_lower.endswith(".geojson") or name_lower.endswith(".json") and "geojson" in name_lower:
+        elif name_lower.endswith(".geojson") or (name_lower.endswith(".json") and "geojson" in name_lower):
             try:
                 import geopandas as gpd  # type: ignore
 
@@ -874,7 +897,6 @@ def load_any(file) -> Optional[pd.DataFrame]:
                     )
                     st.code(traceback.format_exc(), language="text")
                     return None
-
         elif name_lower.endswith(".gml"):
             try:
                 import geopandas as gpd  # type: ignore
@@ -890,11 +912,7 @@ def load_any(file) -> Optional[pd.DataFrame]:
                 )
                 st.code(traceback.format_exc(), language="text")
                 return None
-
-        # NetCDF and similar, or anything else: delegate to core.load_table
         else:
-            # load_table in core.py is expected to handle:
-            # parquet, feather, json, ndjson, h5, hdf5, nc, netcdf, arrow, etc
             df = load_table(file)
 
         df = normalize_columns(df)
@@ -908,7 +926,6 @@ def load_any(file) -> Optional[pd.DataFrame]:
             )
             return None
 
-        # Row guard for extremely large datasets
         max_rows = 1_000_000
         if len(df) > max_rows:
             st.warning(
@@ -928,13 +945,6 @@ def load_any(file) -> Optional[pd.DataFrame]:
 
 
 def ensure_columns(df: pd.DataFrame, repair: str, energy: str) -> bool:
-    """
-    Ensure the requested repair/energy columns exist.
-
-    We keep this strict (no silent remapping) so that compute_rye_from_df,
-    which already has its own safety logic, receives exactly what the user
-    expects.
-    """
     miss = [c for c in [repair, energy] if c not in df.columns]
     if miss:
         st.error(tr(f"Missing columns: {', '.join(miss)}", f"Faltan columnas: {', '.join(miss)}"))
@@ -952,7 +962,6 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float, auto_roll_flag:
 
     rye = _compute_rye_from_df(df_sim, repair_col=col_repair, energy_col=col_energy)
 
-    # window selection
     w = window
     if auto_roll_flag:
         w = smart_window(len(df_sim), getattr(preset, "default_rolling", None))
@@ -976,7 +985,6 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float, auto_roll_flag:
         "summary_roll": summary_roll,
     }
 
-    # Optional advanced analytics
     try:
         if detect_regimes is not None:
             out["regimes"] = detect_regimes(
@@ -1013,12 +1021,6 @@ def compute_block(df: pd.DataFrame, label: str, sim_mult: float, auto_roll_flag:
 
 
 def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str) -> str:
-    """
-    Turn summary stats into a richer narrative for humans and teams.
-
-    Works in both languages and in both system and marketing presets.
-    Does not assume any particular summary keys beyond a few safe ones.
-    """
     mean_v = float(summary.get("mean", 0) or 0)
     max_v = float(summary.get("max", 0) or 0)
     min_v = float(summary.get("min", 0) or 0)
@@ -1029,13 +1031,11 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
     p90 = summary.get("p90", None)
     resil = float(summary.get("resilience", 0) or 0) if "resilience" in summary else None
 
-    # optional extra hints if summarize() provides them
     nonzero_frac = summary.get("nonzero_fraction", None)
     positive_frac = summary.get("positive_fraction", None)
 
     marketing_mode_local = preset_name.lower().startswith("marketing")
 
-    # variation label
     if std_v < 0.05:
         var_label_en = "very low"
         var_label_es = "muy baja"
@@ -1051,7 +1051,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
 
     lines: list[str] = []
 
-    # 1. Data volume and basic stats
     if language == "Español":
         if count_v <= 0:
             lines.append(
@@ -1097,7 +1096,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                 "based on the 10th to 90th percentile range."
             )
 
-    # 2. Flat or suspicious patterns
     span = max_v - min_v
     near_zero_band = abs(mean_v) < 0.02 and span < 0.05 and count_v >= 10
 
@@ -1126,7 +1124,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                 "efficiency band; meaningful improvement would likely require changing the strategy or inputs."
             )
 
-    # 3. Resilience-focused text
     if resil is not None:
         if language == "Español":
             if resil < 0.1:
@@ -1161,7 +1158,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                     "which points to effective control loops."
                 )
 
-    # 4. Efficiency strength and band interpretation
     if marketing_mode_local:
         if language == "Español":
             if mean_v > 1.0:
@@ -1223,7 +1219,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                     "Efficiency is modest. Look for regions where energy is high but repair return is weak, then prune or redesign interventions."
                 )
 
-    # 5. Early warning on instability around thresholds
     if p10 is not None and p90 is not None:
         crosses_low = p10 < 0.3 < p90
         crosses_high = p10 < 0.6 < p90
@@ -1251,7 +1246,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                     "system already operates in a high efficiency mode; those conditions are worth identifying and scaling."
                 )
 
-    # 6. Optional nonzero and positive fraction hints
     if nonzero_frac is not None:
         try:
             nz = float(nonzero_frac)
@@ -1329,7 +1323,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                         "the least productive cycles rather than eliminating failed ones."
                     )
 
-    # 6b. Ecological and marine specific hint if preset name suggests that domain
     preset_lower = preset_name.lower()
     if any(key in preset_lower for key in ["marine", "ocean", "ecology", "limnology"]):
         if language == "Español":
@@ -1343,7 +1336,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                 "respiration, as well as seasonal shifts in system stability."
             )
 
-    # 7. Rolling window and simulation factor
     if language == "Español":
         lines.append(f"La ventana móvil de {w} puntos ayuda a suavizar el ruido de corto plazo.")
         if sim_mult != 1.0:
@@ -1371,7 +1363,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
                     "at a similar rate, RYE will tend to fall."
                 )
 
-    # 8. Next steps guidance
     if marketing_mode_local:
         if language == "Español":
             lines.append(
@@ -1401,10 +1392,6 @@ def make_interpretation(summary: dict, w: int, sim_mult: float, preset_name: str
 
 
 def make_quick_summary(summary: dict, w: int, preset_name: str) -> str:
-    """
-    Short 1 to 2 sentence summary for the top of the report.
-    This is what Erika or any scientist can read in 3 seconds.
-    """
     mean_v = float(summary.get("mean", 0) or 0)
     resil = float(summary.get("resilience", 0) or 0)
     preset_lower = preset_name.lower()
@@ -1488,8 +1475,8 @@ with tab1:
                     number={"suffix": " / 100"},
                     title={
                         "text": tr(
-                            "Self repair efficiency",
-                            "Eficiencia de autorreparación",
+                            "Self Repair Index",
+                            "Índice de autorreparación",
                         )
                     },
                     gauge={
@@ -1511,15 +1498,15 @@ with tab1:
             st.plotly_chart(fig_gauge, use_container_width=True)
             if language == "Español":
                 st.caption(
-                    "Este indicador resume qué tan bien está funcionando el bucle TGRM "
-                    "(detectar, corregir con el mínimo cambio, verificar) usando RYE medio, resiliencia "
-                    "y la fracción de ciclos con reparación efectiva."
+                    "Este índice resume la calidad de la autorreparación en el conjunto de datos integrando tres señales: "
+                    "RYE medio (rendimiento de reparación por energía), resiliencia (estabilidad frente a fluctuaciones) "
+                    "y la fracción de ciclos con reparación positiva. Úsalo junto con las gráficas completas de RYE."
                 )
             else:
                 st.caption(
-                    "This gauge summarizes how well the TGRM loop "
-                    "(detect, minimal repair, verify) is working using mean RYE, resilience, "
-                    "and the share of cycles that deliver effective repair."
+                    "This index summarizes the quality of self repair in the dataset by integrating three signals: "
+                    "mean RYE (repair yield per unit energy), resilience (stability under fluctuation), and the fraction "
+                    "of cycles delivering positive repair. Use this score alongside the full RYE charts."
                 )
 
             if marketing_mode:
@@ -1532,15 +1519,40 @@ with tab1:
                     )
                 )
 
+            # Phase classification and predicted collapse metrics
+            phase_label = classify_phase(rye)
+            collapse_time = predict_collapse_time(
+                rye,
+                time_values=df1[col_time] if col_time in df1.columns else np.arange(len(rye)),
+                threshold=0.0,
+            )
+            colX, colY = st.columns(2)
+            colX.metric(
+                tr("Phase", "Fase"),
+                phase_label.replace("_", " ").title(),
+                help=tr("Estimated phase based on RYE trend", "Fase estimada basada en la tendencia de RYE"),
+            )
+            if collapse_time is not None:
+                colY.metric(
+                    tr("Predicted collapse index", "Índice de colapso previsto"),
+                    f"{collapse_time:.1f}",
+                    help=tr("Projected index/time where RYE crosses zero",
+                            "Índice/tiempo previsto donde RYE cruza cero"),
+                )
+            else:
+                colY.metric(
+                    tr("Predicted collapse index", "Índice de colapso previsto"),
+                    tr("None", "Ninguno"),
+                    help=tr("No collapse predicted", "No se predice colapso"),
+                )
+
             st.write(tr("Columns:", "Columnas:"))
             st.json(list(df1.columns))
 
-            # Simple marketing helpers
             if marketing_mode:
                 with st.expander(tr("Marketing helpers", "Ayudas de marketing"), expanded=False):
                     cols = list(df1.columns)
 
-                    # choose defaults
                     default_outcome = col_repair if col_repair in cols else (cols[0] if cols else None)
                     if col_energy in cols:
                         default_cost = col_energy
@@ -1619,7 +1631,6 @@ with tab1:
                         )
                     )
 
-            # RYE line(s)
             if col_time in df1.columns:
                 idx = df1[col_time]
                 fig = px.line(
@@ -1669,7 +1680,6 @@ with tab1:
                 )
                 st.plotly_chart(fig3, use_container_width=True)
 
-            # Extra charts
             with st.expander(tr("More visuals", "Más visualizaciones")):
                 hist = px.histogram(
                     pd.DataFrame({"RYE": rye}),
@@ -1688,6 +1698,20 @@ with tab1:
                             labels={"x": col_energy, "y": "Δ" + col_repair},
                             title="Energy vs ΔPerformance",
                         )
+                        # Energy efficiency frontier overlay
+                        eff_mask = np.isfinite(df1[col_energy]) & np.isfinite(dperf)
+                        x_e = df1[col_energy][eff_mask]
+                        y_dp = dperf[eff_mask]
+                        if len(x_e) > 1:
+                            coeffs = np.polyfit(x_e, y_dp, 1)
+                            slope, intercept = coeffs
+                            scatter.add_scatter(
+                                x=x_e,
+                                y=slope * x_e + intercept,
+                                mode="lines",
+                                name=tr("Efficiency frontier", "Frontera de eficiencia"),
+                                line={"dash": "dash"},
+                            )
                         st.plotly_chart(scatter, use_container_width=True)
                     except Exception as e:
                         st.warning(
@@ -1697,7 +1721,6 @@ with tab1:
                             )
                         )
 
-            # Diagnostics (optional analytics)
             with st.expander(tr("Diagnostics", "Diagnósticos")):
                 if energy_delta_performance_correlation is not None:
                     try:
@@ -1726,6 +1749,22 @@ with tab1:
             st.subheader(tr("Summary", "Resumen"))
             st.code(json.dumps(summary, indent=2))
 
+            # Repair alerts based on RYE and phase
+            if np.nanmean(rye) < 0.3:
+                st.warning(
+                    tr(
+                        "Alert: Average RYE is low (<0.3). Repair efficiency is weak.",
+                        "Alerta: El RYE promedio es bajo (<0.3). La eficiencia de reparación es débil.",
+                    )
+                )
+            if phase_label in ("decreasing", "collapse"):
+                st.error(
+                    tr(
+                        "Warning: System appears to be degrading. Consider interventions.",
+                        "Advertencia: El sistema parece estar degradándose. Considera intervenciones.",
+                    )
+                )
+
             enriched = df1.copy()
             enriched["RYE"] = rye
             enriched[f"RYE_rolling_{w}"] = rye_roll
@@ -1749,6 +1788,18 @@ with tab1:
                 tr("Download summary JSON", "Descargar JSON de resumen"),
                 io.BytesIO(json.dumps(summary, indent=2).encode("utf-8")).getvalue(),
                 file_name="summary.json",
+                mime="application/json",
+            )
+
+            # Enriched summary export including phase and collapse
+            enriched_summary = summary.copy()
+            enriched_summary["phase"] = phase_label
+            if collapse_time is not None:
+                enriched_summary["predicted_collapse_index"] = collapse_time
+            st.download_button(
+                tr("Download summary with phase/collapse", "Descargar resumen con fase/colapso"),
+                io.BytesIO(json.dumps(enriched_summary, indent=2).encode("utf-8")).getvalue(),
+                file_name="summary_enriched.json",
                 mime="application/json",
             )
 
@@ -1799,6 +1850,36 @@ with tab2:
                     msg_en = "Datasets A and B deliver essentially the same outcome per unit of spend."
                     msg_es = "Los conjuntos A y B entregan prácticamente el mismo resultado por unidad de gasto."
                 st.info(tr(msg_en, msg_es))
+
+            # Multi system phase and collapse comparison
+            phase1 = classify_phase(b1["rye"])
+            phase2 = classify_phase(b2["rye"])
+            collapse1 = predict_collapse_time(
+                b1["rye"],
+                time_values=df1[col_time] if col_time in df1.columns else np.arange(len(b1["rye"])),
+                threshold=0.0,
+            )
+            collapse2 = predict_collapse_time(
+                b2["rye"],
+                time_values=df2[col_time] if col_time in df2.columns else np.arange(len(b2["rye"])),
+                threshold=0.0,
+            )
+            st.caption(
+                tr(
+                    f"Phase A: {phase1.replace('_',' ').title()}, "
+                    + (f"Predicted collapse A: {collapse1:.1f}" if collapse1 is not None else "no collapse predicted"),
+                    f"Fase A: {phase1.replace('_',' ').title()}, "
+                    + (f"Colapso previsto A: {collapse1:.1f}" if collapse1 is not None else "no se predice colapso"),
+                )
+            )
+            st.caption(
+                tr(
+                    f"Phase B: {phase2.replace('_',' ').title()}, "
+                    + (f"Predicted collapse B: {collapse2:.1f}" if collapse2 is not None else "no collapse predicted"),
+                    f"Fase B: {phase2.replace('_',' ').title()}, "
+                    + (f"Colapso previsto B: {collapse2:.1f}" if collapse2 is not None else "no se predice colapso"),
+                )
+            )
 
             if col_time in df1.columns and col_time in df2.columns:
                 x1 = df1[col_time]
@@ -1863,22 +1944,15 @@ with tab3:
     if df1 is None:
         st.info(tr("Upload a file to see domain splits.", "Sube un archivo para ver los dominios."))
     else:
-        # robust domain column selection (case-insensitive + aliases)
         lower_to_actual = {c.lower(): c for c in df1.columns}
         effective_domain_col = None
 
-        # 1) direct match (case-insensitive) for user-provided col_domain
         if col_domain:
             effective_domain_col = lower_to_actual.get(col_domain.lower())
-
-        # 2) canonical 'domain'
         if effective_domain_col is None and "domain" in df1.columns:
             effective_domain_col = "domain"
-
-        # 3) aliases from DOMAIN_ALIASES then COLUMN_ALIASES["domain"], if provided
         if effective_domain_col is None:
-            alias_list: list[str] = {}
-            alias_list = []
+            alias_list: list[str] = []
             if isinstance(DOMAIN_ALIASES, (list, tuple)):
                 alias_list.extend([str(a) for a in DOMAIN_ALIASES])
             alias_list.extend(COLUMN_ALIASES.get("domain", []))
@@ -1897,7 +1971,6 @@ with tab3:
             )
             st.write(tr("Available columns:", "Columnas disponibles:"), list(df1.columns))
         elif ensure_columns(df1, col_repair, col_energy):
-            # remember the effective domain col for use in reports (separate key, safe)
             st.session_state["effective_domain_col"] = effective_domain_col
 
             b = compute_block(df1, "primary", sim_factor, auto_roll)
@@ -1940,12 +2013,10 @@ with tab4:
 
             st.write(tr("Build a portable report to share with teams.", "Genera un reporte portátil para compartir con tu equipo."))
 
-            # new quick summary on screen for fast reading
             quick_summary = make_quick_summary(summary, w, preset_name)
             st.subheader(tr("Quick summary", "Resumen rápido"))
             st.write(quick_summary)
 
-            # recompute Reparodynamics score here for the metadata
             reparo_score_report = compute_reparodynamics_score(summary)
 
             domain_meta_col = ""
