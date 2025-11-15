@@ -1,124 +1,157 @@
-# 🧠 RYE Analyzer
+# 🧠 RYE Analyzer  
+### *Reparodynamics Open Science Initiative*  
+**Created by Cody Ryan Jenkins**
 
-**Reparodynamics Open Science Initiative**  
-Tools for measuring self repair and efficiency in real systems.
-
-Repair Yield per Energy (RYE) is a universal metric for measuring how efficiently a system converts energy or effort into repair or improvement.  
-The RYE Analyzer implements the Reparodynamics framework created by **Cody Ryan Jenkins**.
+A high-precision analytical engine for measuring **self-repair efficiency**, **resilience**, and **adaptive stability** in real systems using the Reparodynamics framework.  
+At its core is **RYE — Repair Yield per Energy**, a universal metric that quantifies how effectively a system converts energy or effort into verified improvement.
 
 ---
 
-## 🔖 Badges
+## 🔖 Scientific Badges
 
 ![License](https://img.shields.io/badge/License-Reparodynamics_Dual-blue)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-brightgreen)
-![Framework](https://img.shields.io/badge/Streamlit-Ready-orange)
-![Status](https://img.shields.io/badge/Status-Active-success)
-![Open Science](https://img.shields.io/badge/Open_Science-Supported-purple)
+![Framework](https://img.shields.io/badge/Streamlit-Ready-FE560A)
+![Stability](https://img.shields.io/badge/Stability-Production-success)
+![Open Science](https://img.shields.io/badge/Open_Science-Supported-9D4EDD)
+![Domains](https://img.shields.io/badge/Domains-AI%20%7C%20Biology%20%7C%20Robotics%20%7C%20Marketing-informational)
 
 ---
 
-## 🔗 Live App
-
+## 🔗 Live App  
+**Run instantly in your browser:**  
 https://rye-analyzer-live.streamlit.app/
 
-Use the hosted Streamlit app to run RYE analyses without installing anything.
+No installation required. Fully optimized for desktop and mobile.
 
 ---
 
-## 🚀 Features
+# 🚀 Core Capabilities
 
-- Single file analysis with automatic column detection  
-- A and B dataset comparison  
-- Multi domain presets for AI, Biology, Robotics, Marketing, Marine Biology, Omics, and General Systems  
-- Energy simulator for hypothetical energy changes  
-- Rolling, EMA, cumulative, and windowed smoothing  
-- RYE scorecard and Reparodynamics (TGRM) self repair gauge  
-- Phase classification (high efficiency, stable, mixed, decreasing, collapse)  
-- Collapse prediction based on linear trend  
-- Efficiency frontier regression for energy vs delta performance  
-- Noise floor and stability diagnostics  
-- Enriched CSV, JSON, and Unicode safe PDF export  
-- PDF reports include a clickable DOI or dataset link  
-- Supports CSV, TSV, Excel, JSON, ZIP, GZ, Darwin Core Archives, Parquet, HDF5, Arrow, and NetCDF  
-- Interactive Streamlit UI that works on mobile and desktop  
-- Built in example dataset to explore RYE without your own data  
+### 🔬 **1. Single-Dataset RYE Analysis**
+- Automatic column detection  
+- Multi-domain presets  
+- Time-based or index-based RYE curves  
+- Delta-performance engine  
+- Rolling, EMA, and cumulative smoothing
+
+### 🔄 **2. Full A ↔ B Dataset Comparison**
+Evaluate improvement or degradation between two conditions:
+
+- ΔRYE difference  
+- Resilience and stability comparison  
+- Collapse risk estimation for A and B  
+- Overlayed curves (rolling, EMA, cumulative)  
+- Domain-aware diagnostics  
+- Combined enriched output  
+
+Ideal for:
+- Before/after experiments  
+- A/B marketing tests  
+- Biological perturbations  
+- Firmware or robotics tuning  
+- Omics analysis  
+- Ecological and marine datasets  
+
+### ⚙️ **3. Energy Simulator**
+Test hypothetical changes in energy or resource usage and see the RYE impact instantly.
+
+### 📊 **4. Advanced Reparodynamic Analytics**
+- TGRM self-repair gauge  
+- Phase classification  
+  - High efficiency  
+  - Stable  
+  - Mixed  
+  - Decreasing  
+  - Collapse  
+- Collapse prediction via trend modeling  
+- Efficiency frontier regression  
+- Noise floor, stability, and resilience diagnostics  
+
+### 📦 **5. Multi-Format Support**
+Accepts virtually any scientific dataset:
+
+- CSV  
+- TSV  
+- Excel  
+- JSON  
+- NDJSON  
+- ZIP / GZ bundles  
+- Parquet  
+- HDF5  
+- Arrow  
+- NetCDF  
+- Darwin Core Archives  
+- Many omics and ecological formats  
+
+### 📤 **6. Unified Export Suite**
+- Enriched CSV  
+- Summary JSON  
+- Extended JSON (phase + collapse + diagnostics)  
+- Unicode-safe PDF with optional DOI/dataset link  
 
 ---
 
-## 🧩 How to Use
+# 🧩 How to Use
 
-### 1. Upload your dataset
-
-Required columns:
-
+### 1. **Upload your dataset**
+Provide at minimum:
 - `performance`  
 - `energy`  
 
 Optional:
-
 - `time`  
-- `domain`  
+- `domain`
 
-The analyzer will try to infer column roles automatically using presets and smart heuristics.
-
----
-
-### 2. Adjust settings
-
-In the sidebar you can tune:
-
-- Rolling window size  
-- EMA smoothing strength  
-- Energy multiplier for what if experiments  
-- Domain preset (AI, Biology, Marketing, Marine, General Systems and others)
+The analyzer will automatically infer column roles using semantic heuristics.
 
 ---
 
-### 3. Inspect results
+### 2. **Tune your analysis**
+Adjust in the sidebar:
 
-The app provides:
-
-- RYE curves over time or index  
-- Rolling and EMA smoothed RYE  
-- Stability and resilience metrics  
-- Reparodynamics self repair gauge  
-- Phase classification of the system  
-- Collapse prediction based on trend toward RYE zero  
-- Energy vs delta performance scatter with efficiency frontier  
-- Noise floor and variability diagnostics  
+- Rolling window  
+- EMA smoothing  
+- Energy multiplier  
+- Domain preset  
 
 ---
 
-### 4. Compare datasets
+### 3. **Explore RYE and Reparodynamics**
+Understand system behavior through:
 
-Upload a second file to compare:
-
-- Mean RYE and resilience between A and B  
-- Relative improvement or degradation in efficiency  
-- Phase and collapse risk for each dataset  
-- RYE distributions and smoothed curves side by side  
-
----
-
-### 5. Export results
-
-Download:
-
-- Enriched CSV with RYE, rolling RYE, EMA, and cumulative RYE  
-- Summary JSON  
-- Extended JSON including phase and collapse information  
-- Full Unicode safe PDF report with metadata and optional DOI or dataset link  
+- Base RYE curves  
+- Rolling/EMA smoothed trends  
+- Efficiency frontier  
+- Noise floor  
+- Phase classification  
+- Collapse prediction  
+- Self-repair gauge (TGRM)  
 
 ---
 
-### 6. Try without data
+### 4. **Upload a second file for A↔B comparison**
+Instantly visualize:
 
-If you do not have data ready, click **Download example CSV** in the sidebar and test the full workflow with the built in example dataset.
+- ΔRYE  
+- Resilience shift  
+- Regime change  
+- Stability differences  
+- Collapse risk for each dataset  
 
 ---
 
-## ⚙️ Local Installation
+### 5. **Export everything**
+Generate publication-ready outputs:
+
+- CSV  
+- JSON  
+- Extended JSON  
+- Scientific PDF report  
+
+---
+
+# ⚙️ Local Installation
 
 ```bash
 git clone https://github.com/BoneManTGRM/rye-analyzer.git
