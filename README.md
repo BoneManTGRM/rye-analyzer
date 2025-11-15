@@ -4,11 +4,11 @@ The RYE Analyzer implements the Reparodynamics framework created by Cody Ryan Je
 
 ![banner](banner.png)
 
-🔗 Live App  
+🔗 **Live App**  
 https://rye-analyzer-live.streamlit.app/
 
 ![License](https://img.shields.io/badge/License-Dual-blue.svg)
-![Python](https://img.shields.io/badge/Python-3.9%2B-green.svg)
+![Python](https://img.shields.io/badge/Python-3.9+-green.svg)
 ![Streamlit](https://img.shields.io/badge/Streamlit-Ready-orange.svg)
 ![OpenScience](https://img.shields.io/badge/Open%20Science-Supported-brightgreen.svg)
 
@@ -27,32 +27,32 @@ https://rye-analyzer-live.streamlit.app/
 - Noise floor and stability diagnostics  
 - Enriched CSV, JSON, and Unicode safe PDF export  
 - PDF reports include clickable DOI or dataset link  
-- Supports CSV, TSV, Excel, JSON, ZIP, GZ, Darwin Core archives  
-- Interactive Streamlit UI that works on mobile and desktop  
-- Comes with a built in example dataset
+- Supports CSV, TSV, Excel, JSON, ZIP, GZ, and Darwin Core archives  
+- Interactive Streamlit UI for desktop and mobile  
+- Includes a built in example dataset  
 
 ---
 
 ## 🧩 How to Use
 
-### 1. Upload your dataset  
+### 1. Upload your dataset
 Required columns:  
 - performance  
 - energy  
 
-Optional:  
+Optional columns:  
 - time  
 - domain  
 
 The Analyzer will attempt to infer columns automatically.
 
-### 2. Adjust settings  
+### 2. Adjust settings
 - Rolling window  
 - EMA smoothing  
 - Energy multiplier  
 - Domain preset selection  
 
-### 3. Inspect results  
+### 3. Inspect results
 - RYE curves  
 - Rolling and EMA smoothing  
 - Efficiency stability and frontier  
@@ -61,17 +61,17 @@ The Analyzer will attempt to infer columns automatically.
 - Phase classification  
 - Collapse prediction  
 
-### 4. Compare datasets  
-Upload a second file to evaluate changes in resilience, collapse risk, efficiency, and RYE deltas.
+### 4. Compare datasets
+Upload a second file to compare resilience, collapse risk, efficiency, and RYE deltas.
 
-### 5. Export results  
+### 5. Export results
 Download:  
 - enriched CSV  
 - summary JSON  
-- extended JSON with phase and collapse information  
-- full Unicode safe PDF with metadata  
+- extended JSON with phase and collapse metrics  
+- full Unicode safe PDF with metadata and DOI link  
 
-### 6. Try without data  
+### 6. Try without data
 Use the built in example dataset.
 
 ---
