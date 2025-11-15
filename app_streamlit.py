@@ -293,18 +293,43 @@ def classify_phase(rye_series):
 
 def predict_collapse_time(rye_series, time_values=None, threshold=0.0):
     """
-    Given a RYE time series and optional time axis, predict when it may reach a collapse threshold.
-    Uses simple linear extrapolation based on last portion of data.
-    Returns index or time of predicted crossing; returns None if trend is positive or unusable.
+    Given a RYE time series and optional time axis, predict when it may reach a
+    collapse threshold.
+
+    Uses simple linear extrapolation on the last half of the data.
+    If the time axis is not numeric (dates, strings, etc.), it falls back to
+    using simple index positions (0, 1, 2, ...).
+
+    Returns the predicted index/time of crossing, or None if the trend is
+    positive or not usable.
     """
     arr = np.asarray(rye_series, dtype=float)
-    if time_values is None:
-        time_values = np.arange(len(arr))
-    if len(arr) < 2:
+    n = len(arr)
+    if n < 2:
         return None
 
-    subset = slice(len(arr) // 2, len(arr))
-    x = np.asarray(time_values[subset], dtype=float)
+    # Build a numeric x-axis
+    if time_values is None:
+        x_all = np.arange(n, dtype=float)
+    else:
+        # Try direct numeric conversion
+        try:
+            x_all = np.asarray(time_values, dtype=float)
+        except Exception:
+            # Try pandas numeric conversion
+            try:
+                x_all = pd.to_numeric(time_values, errors="coerce").to_numpy(dtype=float)
+            except Exception:
+                # Final fallback: simple index positions
+                x_all = np.arange(n, dtype=float)
+
+    # Ensure same length; if not, fall back to index positions
+    if len(x_all) != n:
+        x_all = np.arange(n, dtype=float)
+
+    # Use the last half of the series for the trend
+    subset = slice(n // 2, n)
+    x = x_all[subset]
     y = arr[subset]
 
     mask = np.isfinite(x) & np.isfinite(y)
@@ -312,15 +337,19 @@ def predict_collapse_time(rye_series, time_values=None, threshold=0.0):
         return None
 
     coef = np.polyfit(x[mask], y[mask], 1)
-    slope = coef[0]
-    intercept = coef[1]
+    slope, intercept = coef[0], coef[1]
+
+    # Only predict collapse if trend is actually going down
     if slope >= 0:
         return None
 
     t_pred = (threshold - intercept) / slope
-    if t_pred <= x[-1]:
+
+    # If the crossing would have already happened, ignore it
+    if t_pred <= x[mask][-1]:
         return None
-    return t_pred
+
+    return float(t_pred)
 
 
 def _first_or(default, lst):
