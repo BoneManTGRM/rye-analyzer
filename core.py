@@ -1507,13 +1507,87 @@ def recommend_window(n_rows: int, preset_default: Optional[int]) -> int:
     return guess
 
 # ------------------------------
+# Collapse index helper
+# ------------------------------
+def compute_collapse_index(rye_values: Sequence[float], stats: Dict[str, Any]) -> Optional[float]:
+    """
+    Bounded collapse index in [0, 100] that reflects how often and how
+    persistently the system falls into a low-efficiency band.
+
+    rye_values : sequence of RYE-like values
+    stats      : summary dict that at least includes "count" and optionally "resilience"
+
+    Returns a float in [0, 100] or None if there is essentially no collapse
+    risk (very small scores or too few points).
+    """
+    if stats is None:
+        return None
+
+    try:
+        n = int(stats.get("count") or 0)
+    except Exception:
+        n = 0
+
+    if n < 5:
+        return None
+
+    arr = np.asarray(rye_values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 5:
+        return None
+
+    # Degenerate all-zero series: treat as strongly collapsed but bounded.
+    if np.allclose(arr, 0.0):
+        return 90.0
+
+    # Define low-efficiency threshold from data (adaptive) but at least 0.05
+    q25 = float(np.nanquantile(arr, 0.25))
+    low_thresh = max(0.05, q25)
+
+    low_mask = arr <= low_thresh
+    low_fraction = float(low_mask.mean())
+
+    # Longest consecutive run of low-efficiency points
+    longest_run = 0
+    current_run = 0
+    for is_low in low_mask:
+        if is_low:
+            current_run += 1
+            if current_run > longest_run:
+                longest_run = current_run
+        else:
+            current_run = 0
+
+    longest_run_fraction = float(longest_run) / float(arr.size)
+
+    # Base 0–100 score from prevalence and persistence
+    base_score = 100.0 * (0.5 * low_fraction + 0.5 * longest_run_fraction)
+
+    # Adjust by resilience if present (more resilience -> lower collapse score)
+    try:
+        resilience = float(stats.get("resilience") or 0.0)
+    except Exception:
+        resilience = 0.0
+    resilience = max(0.0, min(1.0, resilience))
+
+    adjusted = base_score * (1.0 - 0.7 * resilience)
+
+    collapse_index = float(np.clip(adjusted, 0.0, 100.0))
+
+    # Very small scores are easier to present as "no collapse"
+    if collapse_index < 5.0:
+        return None
+
+    return round(collapse_index, 1)
+
+# ------------------------------
 # Summaries
 # ------------------------------
 def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[str, float]:
     a = np.array(series, dtype=float)
     a = a[np.isfinite(a)]
     if a.size == 0:
-        base = {
+        base: Dict[str, Any] = {
             "mean": 0.0,
             "median": 0.0,
             "min": 0.0,
@@ -1527,10 +1601,11 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
             "iqr": 0.0,
             "nonzero_fraction": 0.0,
             "positive_fraction": 0.0,
+            "collapse_index": None,
         }
         if with_shape:
             base.update({"skew": 0.0, "kurtosis": 0.0})
-        return base
+        return base  # type: ignore[return-value]
 
     mean = float(np.nanmean(a))
     std = float(np.nanstd(a))
@@ -1544,7 +1619,7 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
     positive = float(np.count_nonzero(a > 0.0))
     total = float(a.size)
 
-    out = {
+    out: Dict[str, Any] = {
         "mean": mean,
         "median": float(np.nanmedian(a)),
         "min": float(np.nanmin(a)),
@@ -1559,6 +1634,11 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
         "nonzero_fraction": nonzero / total if total > 0 else 0.0,
         "positive_fraction": positive / total if total > 0 else 0.0,
     }
+
+    # Collapse index (0–100 or None) for this series
+    ci = compute_collapse_index(a, out)
+    out["collapse_index"] = ci
+
     if with_shape:
         try:
             from scipy.stats import skew, kurtosis  # type: ignore
@@ -1568,7 +1648,7 @@ def summarize_series(series: Sequence[float], with_shape: bool = False) -> Dict[
         except Exception:
             out["skew"] = float("nan")
             out["kurtosis"] = float("nan")
-    return out
+    return out  # type: ignore[return-value]
 
 def summarize_by_domain(
     df: pd.DataFrame,
@@ -1583,7 +1663,7 @@ def summarize_by_domain(
     rows = []
     for dom, sub in df.groupby(domain_col):
         rye = compute_rye_from_df(sub, repair_col=repair_col, energy_col=energy_col)
-        rec = {"domain": dom}
+        rec: Dict[str, Any] = {"domain": dom}
         rec.update({f"rye_{k}": v for k, v in summarize_series(rye).items()})
         if window and window > 1:
             rroll = rolling_series(rye, window)
@@ -1735,6 +1815,7 @@ __all__ = [
     "rolling_series",
     "ema_series",
     "recommend_window",
+    "compute_collapse_index",
     "summarize_series",
     "summarize_by_domain",
     "detect_regimes",
