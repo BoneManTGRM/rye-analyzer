@@ -1,112 +1,78 @@
-Reparodynamics / RYE Analyzer License
-Copyright © 2025 Cody Ryan Jenkins. All rights reserved.
+Reparodynamics / RYE Analyzer
+Open Science License (Apache 2.0 + Required Attribution)
 
-This software, its code, its algorithms, its design, and all associated
-documentation (the “Software”) are the intellectual property of 
-Cody Ryan Jenkins.
+Copyright © 2025 Cody Ryan Jenkins
+Founder of Reparodynamics and creator of the RYE Analyzer Framework
 
-The Software is made available under a dual-license model:
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this software except in compliance with the License.
+You may obtain a copy of the License at:
 
-----------------------------------------------------------------------
-1. Academic Research License (Free)
-----------------------------------------------------------------------
+    http://www.apache.org/licenses/LICENSE-2.0
 
-Permission is granted to universities, accredited academic researchers,
-and nonprofit scientific groups to use the Software for non-commercial
-research ONLY under the following conditions:
-
-- No part of the Software may be sold.
-- Redistribution of the Software or modified versions is prohibited.
-- Forking, copying, or publicly mirroring the repository is prohibited.
-- Derivative works based on the Software or its underlying concepts 
-  require written permission.
-- Attribution must be maintained as:
-  "Reparodynamics and the RYE Analyzer framework were created by 
-   Cody Ryan Jenkins."
-
-Any use outside academic or nonprofit research requires a commercial
-license.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 ----------------------------------------------------------------------
-2. Commercial License (Required for any for-profit use)
+Required Attribution (This clause must remain in all copies or forks)
 ----------------------------------------------------------------------
 
-Any individual, company, laboratory, government agency, or organization
-that uses the Software for commercial, business, enterprise, consulting,
-paid services, revenue-generating projects, internal tooling,
-manufacturing, or technological development must obtain a commercial
-license from:
+Any use, fork, modification, redistribution, scientific paper,
+dataset analysis, commercial implementation, academic project,
+or derivative work must include clear attribution:
 
-Cody Ryan Jenkins
-Email: PapaDeNico@yahoo.com
+"Reparodynamics, RYE (Repair Yield per Energy), and the TGRM
+(Targeted Gradient Repair Mechanism) framework were created by
+Cody Ryan Jenkins as part of the Reparodynamics Open Science Initiative."
 
-Examples of commercial use include but are not limited to:
-- Selling or monetizing the Software
-- Use inside a company or funded laboratory
-- Consulting work involving the Software
-- SaaS integration or dashboards using RYE/TGRM
-- Training programs or certification materials
-- Development of competing analytical tools
-- Use in AI model evaluation pipelines
-- Incorporation into robotics, biotech, or industrial workflows
+This attribution must appear in at least one of the following:
+- The README of any fork or derivative repository
+- The documentation of any project using the software
+- The Methods, Acknowledgements, or References section of any paper
+- The about dialog or documentation of any commercial tool
+- The footer or description of any scientific dashboard
 
-Commercial use without a license is strictly prohibited.
+Removal of attribution is strictly prohibited.
 
 ----------------------------------------------------------------------
-3. Restrictions (Apply to ALL users)
+Patents, Naming, and Field Ownership
 ----------------------------------------------------------------------
 
-Unless explicit written permission is granted:
+This license grants permission to use the software but does NOT transfer
+ownership of the underlying scientific field or terminology.
 
-- You may NOT fork this repository.
-- You may NOT copy the code.
-- You may NOT redistribute any portion of the Software.
-- You may NOT publish derivative works.
-- You may NOT modify and share the Software.
-- You may NOT use the name “Reparodynamics,” “RYE,” or “TGRM”
-  in any derivative technology, tool, or research without permission.
-- You may NOT host the Software publicly on any platform.
-- You may NOT sublicense the Software.
-- You may NOT remove attribution.
+The terms:
+- "Reparodynamics"
+- "RYE" (Repair Yield per Energy)
+- "TGRM" (Targeted Gradient Repair Mechanism)
+- "Reparodynamic Stability Index"
+- "Reparodynamic Gauge"
 
-All rights not expressly granted are reserved.
+remain part of the Reparodynamics Open Science Initiative and must not
+be used to claim authorship of the field or misrepresent the origin of
+the theory.
 
-----------------------------------------------------------------------
-4. Patents and Algorithms
-----------------------------------------------------------------------
-
-All underlying concepts, equations, and methodologies, including but not
-limited to:
-
-- Reparodynamics
-- RYE (Repair Yield per Energy)
-- TGRM (Targeted Gradient Repair Mechanism)
-- Reparodynamic Gauge / Stability Index
-- Collapse Prediction Models
-- Efficiency Frontier Regression
-
-remain the intellectual property of Cody Ryan Jenkins.
-
-No patent rights or algorithm rights are transferred or granted.
+Users may build tools, enhancements, dashboards, and forks, but may not
+present the underlying scientific framework as their own invention.
 
 ----------------------------------------------------------------------
-5. Limitation of Liability
+Commercial Use
 ----------------------------------------------------------------------
 
-The Software is provided “as is,” without any warranty, express or
-implied. The author is not responsible for any damages or losses arising
-from use of the Software.
+Commercial use is allowed under Apache 2.0; however, attribution is
+required and must remain visible in documentation or credits.
 
 ----------------------------------------------------------------------
-6. Contact
+Community Contributions
 ----------------------------------------------------------------------
 
-For commercial licensing, written permissions, or special use cases,
-contact:
-
-Cody Ryan Jenkins
-Email: PapaDeNico@yahoo.com
+Contributions, pull requests, and forks are welcome. All contributors
+agree that their contributions remain under the Apache 2.0 License and
+retain attribution to the founder of the field.
 
 ----------------------------------------------------------------------
-END OF LICENSE
+End of License
 ----------------------------------------------------------------------
