@@ -1,153 +1,148 @@
 # 🧠 RYE Analyzer  
 ### *Reparodynamics Open Science Initiative*  
-**Created by Cody Ryan Jenkins**
+**Created by Cody Ryan Jenkins — Founder of Reparodynamics**
 
-A high-precision analytical engine for measuring **self-repair efficiency**, **resilience**, and **adaptive stability** in real systems using the Reparodynamics framework.  
-At its core is **RYE — Repair Yield per Energy**, a universal metric that quantifies how effectively a system converts energy or effort into verified improvement.
+A high-precision analytical engine for measuring **self-repair efficiency**, **resilience**, and **adaptive stability** in real systems using the Reparodynamics framework.
+
+At its core is **RYE — Repair Yield per Energy**, a universal metric that quantifies how effectively a system converts energy into verified improvement across biology, AI, robotics, engineering, and ecological sciences.
 
 ---
 
 ## 🔖 Scientific Badges
 
-![License](https://img.shields.io/badge/License-Reparodynamics_Dual-blue)
+![License](https://img.shields.io/badge/License-Apache_2.0_%2B_Attribution-blue)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-brightgreen)
 ![Framework](https://img.shields.io/badge/Streamlit-Ready-FE560A)
 ![Stability](https://img.shields.io/badge/Stability-Production-success)
-![Open Science](https://img.shields.io/badge/Open_Science-Supported-9D4EDD)
+![Open Science](https://img.shields.io/badge/Open_Science-Enabled-9D4EDD)
 ![Domains](https://img.shields.io/badge/Domains-AI%20%7C%20Biology%20%7C%20Robotics%20%7C%20Marketing-informational)
 
 ---
 
 ## 🔗 Live App  
-**Run instantly in your browser:**  
-https://rye-analyzer-live.streamlit.app/
+Run instantly in your browser (no installation required):
 
-No installation required. Fully optimized for desktop and mobile.
+**https://rye-analyzer-live.streamlit.app/**
+
+Optimized for desktop, tablet, and mobile.
 
 ---
 
 # 🚀 Core Capabilities
 
-### 🔬 **1. Single-Dataset RYE Analysis**
-- Automatic column detection  
+## 🔬 1. Single-Dataset RYE Analysis
+- Automatic semantic column detection  
 - Multi-domain presets  
 - Time-based or index-based RYE curves  
-- Delta-performance engine  
-- Rolling, EMA, and cumulative smoothing
+- Δ-performance computation  
+- Rolling, EMA, and cumulative smoothing  
 
-### 🔄 **2. Full A ↔ B Dataset Comparison**
-Evaluate improvement or degradation between two conditions:
+---
+
+## 🔄 2. A ↔ B Comparative Analysis
+Compare stability, drift, and repair efficiency between two datasets:
 
 - ΔRYE difference  
 - Resilience and stability comparison  
-- Collapse risk estimation for A and B  
+- Collapse prediction  
 - Overlayed curves (rolling, EMA, cumulative)  
 - Domain-aware diagnostics  
-- Combined enriched output  
 
-Ideal for:
-- Before/after experiments  
-- A/B marketing tests  
-- Biological perturbations  
-- Firmware or robotics tuning  
-- Omics analysis  
-- Ecological and marine datasets  
+Ideal for: A/B experiments, biological perturbations, firmware tuning, robotics drift, omics, marine/ecological data, and marketing analytics.
 
-### ⚙️ **3. Energy Simulator**
-Test hypothetical changes in energy or resource usage and see the RYE impact instantly.
+---
 
-### 📊 **4. Advanced Reparodynamic Analytics**
+## ⚙️ 3. Energy Simulator
+Modify hypothetical energy/resource usage and instantly view predicted RYE impacts.
+
+---
+
+## 📊 4. Reparodynamic Analytics
 - TGRM self-repair gauge  
-- Phase classification  
-  - High efficiency  
-  - Stable  
-  - Mixed  
-  - Decreasing  
-  - Collapse  
-- Collapse prediction via trend modeling  
+- Repair-phase classification  
+- Collapse prediction  
 - Efficiency frontier regression  
-- Noise floor, stability, and resilience diagnostics  
+- Noise-floor + resilience diagnostics  
 
-### 📦 **5. Multi-Format Support**
-Accepts virtually any scientific dataset:
+---
+
+## 📦 5. Multi-Format Data Support
+Accepts virtually all scientific dataset types:
 
 - CSV  
 - TSV  
 - Excel  
-- JSON  
-- NDJSON  
-- ZIP / GZ bundles  
+- JSON / NDJSON  
+- ZIP / GZ  
 - Parquet  
 - HDF5  
 - Arrow  
 - NetCDF  
 - Darwin Core Archives  
-- Many omics and ecological formats  
+- Many omics & ecological formats  
 
-### 📤 **6. Unified Export Suite**
+---
+
+## 📤 6. Unified Export Suite
+Generate publication-ready outputs:
+
 - Enriched CSV  
 - Summary JSON  
-- Extended JSON (phase + collapse + diagnostics)  
-- Unicode-safe PDF with optional DOI/dataset link  
+- Extended JSON (phases + collapse + diagnostics)  
+- Unicode-safe PDF (optionally with dataset DOI)  
 
 ---
 
 # 🧩 How to Use
 
-### 1. **Upload your dataset**
-Provide at minimum:
+## 1. Upload your dataset
+Minimum required columns:
 - `performance`  
-- `energy`  
+- `energy`
 
-Optional:
+Optional but recommended:
 - `time`  
 - `domain`
 
-The analyzer will automatically infer column roles using semantic heuristics.
+The analyzer will automatically infer column roles.
 
 ---
 
-### 2. **Tune your analysis**
-Adjust in the sidebar:
+## 2. Adjust your analysis
+Sidebar settings include:
 
 - Rolling window  
 - EMA smoothing  
 - Energy multiplier  
-- Domain preset  
+- Domain presets  
 
 ---
 
-### 3. **Explore RYE and Reparodynamics**
-Understand system behavior through:
+## 3. Interpret RYE and Reparodynamics
+View:
 
-- Base RYE curves  
-- Rolling/EMA smoothed trends  
+- Base RYE  
+- Rolling + EMA  
+- Stability phases  
 - Efficiency frontier  
 - Noise floor  
-- Phase classification  
-- Collapse prediction  
-- Self-repair gauge (TGRM)  
+- TGRM self-repair gauge  
+- Collapse modeling  
 
 ---
 
-### 4. **Upload a second file for A↔B comparison**
+## 4. Add a second file for A↔B comparison
 Instantly visualize:
 
 - ΔRYE  
-- Resilience shift  
+- Stability shift  
 - Regime change  
-- Stability differences  
-- Collapse risk for each dataset  
+- Collapse-risk differences  
 
 ---
 
-### 5. **Export everything**
-Generate publication-ready outputs:
-
-- CSV  
-- JSON  
-- Extended JSON  
-- Scientific PDF report  
+## 5. Export scientific outputs
+Download CSV, JSON, or PDF for research or publication.
 
 ---
 
