@@ -556,6 +556,107 @@ PRESETS: Dict[str, Preset] = {
         },
     ),
 
+    # Ecology / Environmental recovery
+    "Ecology": Preset(
+        name="Ecology",
+        time=_kw(
+            "date",
+            "day",
+            "time",
+            "t",
+            "sample_time",
+            "event_date",
+            "sampling_event",
+            "season",
+            "year",
+            "month",
+            *GENERIC_TIME,
+        ),
+        performance=_kw(
+            # Biological condition / ΔR signals
+            "richness",
+            "species_richness",
+            "taxa_richness",
+            "abundance",
+            "total_abundance",
+            "density",
+            "biomass",
+            "diversity",
+            "shannon",
+            "shannon_index",
+            "simpson",
+            "evenness",
+            "EPT",
+            "EPT_percent",
+            "EPT_pct",
+            "health_index",
+            "ibi",
+            "condition",
+            "growth_rate",
+            "productivity",
+            "cover",
+            "canopy",
+            "functional_group",
+            # Allow all generic performance as backups
+            *GENERIC_PERF,
+        ),
+        energy=_kw(
+            # Environmental energy inputs / stressors
+            "nitrate",
+            "no3",
+            "nitrite",
+            "no2",
+            "ammonium",
+            "nh4",
+            "tn",
+            "total_n",
+            "tp",
+            "total_p",
+            "phosphate",
+            "po4",
+            "silicate",
+            "si",
+            # stable isotopes = perfect energy-proxy
+            "d13c",
+            "δ13c",
+            "delta13c",
+            "d15n",
+            "δ15n",
+            "delta15n",
+            # physicochemical drivers
+            "temperature",
+            "temp",
+            "do",
+            "oxygen",
+            "conductivity",
+            "cond",
+            "salinity",
+            "ph",
+            # hydrology — energy & disturbance
+            "discharge",
+            "flow",
+            "velocity",
+            "stage",
+            # habitat stress / disturbance / cost
+            "disturbance_intensity",
+            "treatment_level",
+            "stress",
+            "light",
+            "par",
+            "radiation",
+            # generic backup energy terms
+            *GENERIC_ENERGY,
+        ),
+        domain="site",  # most ecology datasets use site / habitat; user can override
+        default_rolling=5,  # ecology often needs tighter smoothing windows
+        tooltips={
+            "Performance": "Use biological condition variables such as richness, abundance, biomass, diversity, EPT%, IBI, or growth_rate as ΔR (repair).",
+            "Energy": "Use environmental drivers such as NO3, NH4, PO4, TN/TP, δ13C/δ15N, temperature, flow, or disturbance_intensity as E (effort / cost).",
+            "Time": "Use date, season, sampling_event, or sample_time for ecological time series.",
+            "Domain": "Use site, reach, station, stream, habitat, or sampling location as domains to compare drift and recovery across environments.",
+        },
+    ),
+
     # Marine specific biology preset
     "Marine Biology": Preset(
         name="Marine Biology",
